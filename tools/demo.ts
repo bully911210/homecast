@@ -72,7 +72,7 @@ let cut = { from: 0, to: 0 };
 
 async function capture(): Promise<void> {
   const dataDir = mkdtempSync(join(tmpdir(), 'homecast-demo-'));
-  const w = wire({ dataDir, encoder: 'libx264' });
+  const w = wire({ dataDir, encoder: 'libx264', settleMs: 0 });
   w.config.update({ port: PORT, roots: [{ id: 'demo', path: DEMO }], mdns: false });
   await w.start();
   await w.scanner.idle();

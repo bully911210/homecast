@@ -8,7 +8,7 @@ import { countItems } from './providers/fs/repo.ts';
 import type { Database } from './store.ts';
 import { firewallState, networkProfiles, type FirewallState, type NetworkProfile } from './system.ts';
 
-export const VERSION = '0.2.0';
+export const VERSION = '0.3.0';
 
 export interface HealthDeps {
   db: Database;

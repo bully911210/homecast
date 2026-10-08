@@ -8,7 +8,7 @@ import { wire } from '../server/wire.ts';
 
 await generateFixtures();
 const dataDir = mkdtempSync(join(tmpdir(), 'homecast-e2e-'));
-const w = wire({ dataDir, encoder: 'libx264' });
+const w = wire({ dataDir, encoder: 'libx264', settleMs: 0 });
 w.config.update({ port: 8097, roots: [{ id: 'fixtures', path: FIXTURE_DIR }], mdns: false });
 await w.start();
 await w.scanner.idle();

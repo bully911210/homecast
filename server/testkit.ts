@@ -18,7 +18,7 @@ export interface TestServer {
 
 export async function startTestServer(opts: { roots?: string[]; bins?: Bins } = {}): Promise<TestServer> {
   const dataDir = mkdtempSync(join(tmpdir(), 'homecast-test-'));
-  const w = wire({ dataDir, bins: opts.bins, encoder: 'libx264' });
+  const w = wire({ dataDir, bins: opts.bins, encoder: 'libx264', settleMs: 0 });
   w.config.update({ roots: (opts.roots ?? []).map((p, i) => ({ id: `r${i}`, path: p })) });
   await w.start();
   await w.scanner.idle();

@@ -66,6 +66,11 @@ Every dependency and every non-obvious choice, one line each. The rule: platform
 - Node SEA: esbuild bundles the server into one CJS file, the client files are SEA assets, and `postject` injects the blob into a copy of `node.exe`. ffmpeg/ffprobe sit beside the exe.
 - The exe is not code-signed, so SmartScreen shows "More info → Run anyway". The first-run notes say so.
 
+## Library and state
+
+- A file modified in the last 10 s is treated as still being copied or downloaded: it isn't indexed yet, and a follow-up scan picks it up once it has settled.
+- Watch-position saves carry the device's own timestamp. A save older than the stored one from the same device (a late beacon after a newer save) is ignored. Saves from different devices are never compared, because their clocks may disagree.
+
 ## Known limits
 
 - **Seek clock drift with copied video.** Seeking restarts ffmpeg with an input `-ss`. With `-c:v copy`, the stream starts at the keyframe before the target, so after a seek the clock, saved position and subtitles can be off by up to one GOP (usually 2 to 5 s). Transcoded streams are exact.

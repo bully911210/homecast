@@ -19,6 +19,8 @@ export interface StateBody {
   position: number;
   duration: number;
   watched?: boolean;
+  /** The device's clock when it took the reading (ms). Orders saves from one device. */
+  at?: number;
 }
 
 export function parseStateBody(v: unknown): StateBody | null {
@@ -26,7 +28,8 @@ export function parseStateBody(v: unknown): StateBody | null {
   const duration = v.duration === undefined ? 0 : v.duration;
   if (!isFiniteNonNeg(duration)) return null;
   if (v.watched !== undefined && typeof v.watched !== 'boolean') return null;
-  return { position: duration > 0 ? Math.min(v.position, duration) : v.position, duration, watched: v.watched };
+  if (v.at !== undefined && !(typeof v.at === 'number' && Number.isFinite(v.at) && v.at > 0 && v.at < 1e15)) return null;
+  return { position: duration > 0 ? Math.min(v.position, duration) : v.position, duration, watched: v.watched, at: v.at as number | undefined };
 }
 
 const CAP_KEYS = ['h264', 'hevc', 'vp9', 'av1', 'hls'] as const;

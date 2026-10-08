@@ -1,6 +1,6 @@
 {
   "name": "homecast",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Stream your PC's movies, videos and photos to every TV on your home Wi-Fi. One exe, no cloud.",
   "license": "MIT",
   "type": "module",

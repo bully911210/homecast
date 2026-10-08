@@ -12,6 +12,8 @@ import { parseTitle } from './titles.ts';
 
 const PROBE_WORKERS = 4;
 const DEBOUNCE_MS = 2000;
+/** A file written to in the last few seconds is probably still being copied or downloaded. */
+const SETTLE_MS = 10_000;
 const POLL_MS = 5 * 60_000;
 const IGNORE_RE = /^(\.|\$recycle\.bin$|system volume information$|@eadir$|#recycle$|desktop\.ini$|thumbs\.db$)/i;
 const SUB_EXT = new Set(['srt', 'vtt']);
@@ -46,12 +48,15 @@ export class Scanner {
   readonly #running = new Map<string, Promise<void>>();
   readonly #queued = new Set<string>();
   readonly #debounce = new Map<string, NodeJS.Timeout>();
+  readonly #unsettled = new Set<string>();
+  readonly #settleMs: number;
   #lastScanAt: number | null = null;
   #onChange: () => void = () => {};
 
-  constructor(db: Database, ffprobe: string | null) {
+  constructor(db: Database, ffprobe: string | null, settleMs = SETTLE_MS) {
     this.#db = db;
     this.#ffprobe = ffprobe;
+    this.#settleMs = settleMs;
   }
 
   onChange(fn: () => void): void {
@@ -156,6 +161,7 @@ export class Scanner {
     const removed = repo.sweep(this.#db, rootId, scanId);
     log.info(`scanned ${entry.root.path}: ${probeTargets.length} to probe, ${removed} removed`);
     this.#watch(rootId, real);
+    if (this.#unsettled.delete(rootId)) this.#schedule(rootId, this.#settleMs);
     await this.#probeAll(probeTargets);
   }
 
@@ -199,6 +205,12 @@ export class Scanner {
         if (repo.keepSubtree(this.#db, rootId, childRel, scanId)) kept = true;
         continue;
       }
+      if (Date.now() - st.mtimeMs < this.#settleMs) {
+        // Still being written: index it on a follow-up scan once it has settled, not half-copied now.
+        if (repo.keepSubtree(this.#db, rootId, childRel, scanId)) kept = true;
+        this.#unsettled.add(rootId);
+        continue;
+      }
       const sidecars =
         kind === 'video' ? names.map((n) => matchSidecar(d.name, n)).filter((s): s is Sidecar => s !== null) : undefined;
       const title = kind === 'image' ? d.name : parseTitle(d.name).title;
@@ -238,12 +250,12 @@ export class Scanner {
     await Promise.all(Array.from({ length: Math.min(PROBE_WORKERS, items.length) }, worker));
   }
 
-  #schedule(rootId: string): void {
+  #schedule(rootId: string, delay = DEBOUNCE_MS): void {
     clearTimeout(this.#debounce.get(rootId));
     const t = setTimeout(() => {
       this.#debounce.delete(rootId);
       void this.scan(rootId);
-    }, DEBOUNCE_MS);
+    }, delay);
     this.#debounce.set(rootId, t);
   }
 

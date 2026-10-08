@@ -38,4 +38,7 @@ export const SCHEMA: readonly string[] = [
   CREATE INDEX fs_items_added ON fs_items(added_at);
   `,
   `ALTER TABLE fs_items ADD COLUMN probe_attempts INTEGER NOT NULL DEFAULT 0;`,
+  // Out-of-order saves from one device (a late beacon after a newer save) must not win.
+  `ALTER TABLE state ADD COLUMN device_id TEXT NOT NULL DEFAULT '';
+   ALTER TABLE state ADD COLUMN client_ts REAL NOT NULL DEFAULT 0;`,
 ];

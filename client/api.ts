@@ -38,13 +38,13 @@ export async function saveState(id: string, position: number, duration: number):
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ position: Math.max(0, position), duration: Math.max(0, duration) }),
+    body: JSON.stringify({ position: Math.max(0, position), duration: Math.max(0, duration), at: Date.now() }),
     keepalive: true,
   }).catch(() => undefined); // best effort: playback must not stop because a save failed
 }
 
 export function beaconState(id: string, position: number, duration: number): void {
-  const body = JSON.stringify({ position: Math.max(0, position), duration: Math.max(0, duration) });
+  const body = JSON.stringify({ position: Math.max(0, position), duration: Math.max(0, duration), at: Date.now() });
   const blob = new Blob([body], { type: 'application/json' });
   if (!navigator.sendBeacon(`/api/state/${encodeURIComponent(id)}`, blob)) {
     void fetch(`/api/state/${encodeURIComponent(id)}`, {

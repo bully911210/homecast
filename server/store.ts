@@ -51,15 +51,23 @@ interface StateRow {
   updated_at: number;
 }
 
-export function saveState(db: Database, itemId: string, s: { position: number; duration: number; watched?: boolean }): ItemState {
+export function saveState(
+  db: Database,
+  itemId: string,
+  s: { position: number; duration: number; watched?: boolean; at?: number },
+  deviceId = '',
+): ItemState {
   const watched = s.duration >= MIN_WATCH_DURATION_SECONDS && (s.watched ?? (s.position / s.duration > WATCHED_RATIO));
   const updatedAt = Date.now();
+  // A save from the same device that was taken earlier than the stored one is stale: keep the stored one.
   db.prepare(
-    `INSERT INTO state(item_id, position, duration, watched, updated_at) VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO state(item_id, position, duration, watched, updated_at, device_id, client_ts) VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(item_id) DO UPDATE SET position = excluded.position, duration = excluded.duration,
-       watched = excluded.watched, updated_at = excluded.updated_at`,
-  ).run(itemId, s.position, s.duration, watched ? 1 : 0, updatedAt);
-  return { position: s.position, duration: s.duration, watched, updatedAt };
+       watched = excluded.watched, updated_at = excluded.updated_at, device_id = excluded.device_id, client_ts = excluded.client_ts
+     WHERE excluded.device_id != state.device_id OR excluded.client_ts = 0 OR excluded.client_ts >= state.client_ts`,
+  ).run(itemId, s.position, s.duration, watched ? 1 : 0, updatedAt, deviceId, s.at ?? 0);
+  const row = db.prepare('SELECT * FROM state WHERE item_id = ?').get(itemId) as unknown as StateRow;
+  return toState(row);
 }
 
 function toState(r: StateRow): ItemState {

@@ -163,7 +163,7 @@ export function buildApp(d: AppDeps): Hono<Env> {
     if (!d.registry.has(id)) throw new HttpError(404, 'not found');
     const body = parseStateBody(await jsonBody(c));
     if (!body) return c.json({ error: 'expected { position, duration }' }, 400);
-    return c.json({ state: saveState(d.db, id, body) });
+    return c.json({ state: saveState(d.db, id, body, c.get('device').id) });
   });
 
   // ---- admin: this PC only ----

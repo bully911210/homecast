@@ -39,6 +39,8 @@ export interface WireOpts {
   bins?: Bins;
   /** Skip the hardware encoder probe (tests). */
   encoder?: Encoder;
+  /** How long a file must be untouched before it is indexed (tests use 0). */
+  settleMs?: number;
 }
 
 export function wire(o: WireOpts): Wired {
@@ -53,7 +55,7 @@ export function wire(o: WireOpts): Wired {
   let encoder: Encoder | 'probing' = o.encoder ?? (bins.ffmpeg ? 'probing' : 'libx264');
   const currentEncoder = (): Encoder => (encoder === 'probing' ? 'libx264' : encoder);
 
-  const scanner = new Scanner(db, bins.ffprobe);
+  const scanner = new Scanner(db, bins.ffprobe, o.settleMs);
   const registry = new Registry();
   registry.add(createHomeProvider(db, registry));
   registry.add(createFsProvider({ db, scanner, ffmpeg: bins.ffmpeg, ffprobe: bins.ffprobe, hls, encoder: currentEncoder, encoders: () => encoders, cacheDir: join(o.dataDir, 'cache') }));
