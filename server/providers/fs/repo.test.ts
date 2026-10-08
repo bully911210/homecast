@@ -27,6 +27,37 @@ describe('fs index', () => {
     expect(b.needsProbe).toBe(true); // never probed yet
   });
 
+  it('reuses an ID for one unambiguous moved file with matching size and mtime', () => {
+    const old = repo.upsert(db, 'r', 1, entry('old.mkv'));
+    const fresh = repo.upsert(db, 'r', 2, entry('new.mkv'));
+    const moved = repo.reuseMovedIds(db, 'r', 2);
+    expect(moved.get(fresh.id)).toEqual({ id: old.id, needsProbe: true });
+    expect(repo.getByRel(db, 'r', 'old.mkv')).toBeUndefined();
+    expect(repo.getByRel(db, 'r', 'new.mkv')?.id).toBe(old.id);
+  });
+
+  it('does not guess when multiple moved files have the same signature', () => {
+    repo.upsert(db, 'r', 1, entry('old-a.mkv'));
+    repo.upsert(db, 'r', 1, entry('old-b.mkv'));
+    const a = repo.upsert(db, 'r', 2, entry('new-a.mkv'));
+    const b = repo.upsert(db, 'r', 2, entry('new-b.mkv'));
+    expect(repo.reuseMovedIds(db, 'r', 2).size).toBe(0);
+    expect(repo.getByRel(db, 'r', 'new-a.mkv')?.id).toBe(a.id);
+    expect(repo.getByRel(db, 'r', 'new-b.mkv')?.id).toBe(b.id);
+  });
+
+  it('retries a failed probe at most three times for unchanged media', () => {
+    const first = repo.upsert(db, 'r', 1, entry('broken.mkv'));
+    repo.setProbe(db, first.id, null);
+    const second = repo.upsert(db, 'r', 2, entry('broken.mkv'));
+    expect(second.needsProbe).toBe(true);
+    repo.setProbe(db, first.id, null);
+    const third = repo.upsert(db, 'r', 3, entry('broken.mkv'));
+    expect(third.needsProbe).toBe(true);
+    repo.setProbe(db, first.id, null);
+    expect(repo.upsert(db, 'r', 4, entry('broken.mkv')).needsProbe).toBe(false);
+  });
+
   it('an unreadable folder keeps its subtree (no sweep, no lost history)', () => {
     const kept = repo.upsert(db, 'r', 1, entry('Movies/a.mkv')).id;
     repo.upsert(db, 'r', 1, entry('Movies/Sub/b.mkv'));

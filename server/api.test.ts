@@ -38,7 +38,9 @@ afterAll(() => s.close());
 
 describe('guards', () => {
   it('item API needs pairing', async () => {
-    expect((await fetch(`${s.base}/api/items`)).status).toBe(401);
+    const res = await fetch(`${s.base}/api/items`);
+    expect(res.status).toBe(401);
+    expect((await res.json()).code).toBe('PAIRING_REQUIRED');
   });
 
   it('health is public but minimal; full for loopback', async () => {
@@ -118,7 +120,19 @@ describe('playback', () => {
     const res = await s.get(`/api/open/${byTitle('Direct Movie (2019)').id}`, cookie, { headers: { Range: 'bytes=0-1023' } });
     expect(res.status).toBe(206);
     expect(res.headers.get('content-type')).toBe('video/mp4');
+    expect(res.headers.get('X-HomeCast-Playback')).toBe('direct');
     expect((await res.arrayBuffer()).byteLength).toBe(1024);
+  });
+
+  it('HEAD exposes the server plan and the next attempt advances the ladder', async () => {
+    const id = byTitle('Direct Movie (2019)').id;
+    const first = await s.get(`/api/open/${id}`, cookie, { method: 'HEAD' });
+    expect(first.status).toBe(200);
+    expect(first.headers.get('X-HomeCast-Playback')).toBe('direct');
+    const fallback = await s.get(`/api/open/${id}?attempt=1`, cookie, { method: 'HEAD' });
+    expect(fallback.status).toBe(204);
+    expect(fallback.headers.get('X-HomeCast-Playback')).toBe('remux');
+    expect(fallback.headers.get('location')).toContain('attempt=1');
   });
 
   it.each(['Remux Movie (2020)', 'Hevc Movie (2021)', 'Dts Audio (2018)', 'Av1 Movie (2022)', 'Ünïcödé Fïlm mit Leerzeichen (2017)', 'Show Name S01E02'])(
@@ -127,23 +141,28 @@ describe('playback', () => {
       const id = byTitle(title).id;
       const first = await s.get(`/api/open/${id}`, cookie, { redirect: 'manual' });
       expect(first.status).toBe(302);
+      expect(first.headers.get('X-HomeCast-Playback')).toMatch(/^(remux|hls|transcode)$/);
       const playlistUrl = first.headers.get('location')!;
       expect(playlistUrl).toContain('hls=index.m3u8');
       const pl = await s.get(playlistUrl, cookie);
       expect(pl.status).toBe(200);
       expect(pl.headers.get('content-type')).toBe('application/vnd.apple.mpegurl');
+      expect(pl.headers.get('X-HomeCast-Playback')).toBe(first.headers.get('X-HomeCast-Playback'));
       const text = await pl.text();
       expect(text).toContain('#EXTINF');
       const seg = text.split('\n').find((l) => l.startsWith('/api/open/'))!;
       expect(seg).toContain(`/api/open/${id}?hls=seg_00000`);
       const segRes = await s.get(seg, cookie);
       expect(segRes.status).toBe(200);
+      expect(segRes.headers.get('X-HomeCast-Playback')).toBe(first.headers.get('X-HomeCast-Playback'));
       expect((await segRes.arrayBuffer()).byteLength).toBeGreaterThan(1000);
     },
   );
 
   it('broken file: 422, not a crash', async () => {
-    expect((await s.get(`/api/open/${byTitle('corrupt').id}`, cookie)).status).toBe(422);
+    const res = await s.get(`/api/open/${byTitle('corrupt').id}`, cookie);
+    expect(res.status).toBe(422);
+    expect((await res.json()).code).toBe('MEDIA_UNREADABLE');
   });
 
   it('thumbnails for video and image, cached', async () => {
@@ -178,6 +197,18 @@ describe('state', () => {
     const row = await items('home:continue');
     expect(row[0]?.id).toBe(id);
     expect(row[0]?.meta?.position).toBe(40);
+    await s.get(`/api/state/${id}`, cookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position: 552, duration: 600 }),
+    });
+    expect((await items('home:continue')).some((it) => it.id === id)).toBe(false);
+    await s.get(`/api/state/${id}`, cookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position: 553, duration: 600 }),
+    });
+    expect((await items()).some((it) => it.id === 'home:continue')).toBe(false);
   });
 
   it('rejects bad bodies and unknown providers', async () => {
@@ -185,5 +216,21 @@ describe('state', () => {
       s.get(`/api/state/${id}`, cookie, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
     expect((await post(byTitle('Remux Movie (2020)').id, '{"position":-1}')).status).toBe(400);
     expect((await post('nope:abc', '{"position":1}')).status).toBe(404);
+  });
+
+  it('clamps progress to duration and does not mark very short media watched', async () => {
+    const id = byTitle('Remux Movie (2020)').id;
+    const clamped = await s.get(`/api/state/${id}`, cookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position: 1000, duration: 100 }),
+    });
+    expect((await clamped.json()).state.position).toBe(100);
+    const short = await s.get(`/api/state/${id}`, cookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position: 4, duration: 4, watched: true }),
+    });
+    expect((await short.json()).state.watched).toBe(false);
   });
 });

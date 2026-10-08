@@ -3,6 +3,35 @@ import type { Caps } from '../shared/types.ts';
 import type { Probe } from './media.ts';
 
 export type Encoder = 'h264_nvenc' | 'h264_qsv' | 'h264_amf' | 'libx264';
+export type PlaybackMode = 'direct' | 'remux' | 'hls' | 'transcode' | 'unplayable';
+
+export interface ServerCaps {
+  ffmpeg: boolean;
+  ffprobe: boolean;
+  encoders: readonly Encoder[];
+  hls: boolean;
+}
+
+interface CopyPlan {
+  video: 'copy' | 'none';
+  audio: 'copy' | 'encode' | 'none';
+  segment: 'mpegts' | 'fmp4';
+}
+
+export type PlaybackPlan =
+  | { mode: 'direct' }
+  | ({ mode: 'remux' } & CopyPlan)
+  | ({ mode: 'hls' } & CopyPlan)
+  | ({ mode: 'transcode'; video: 'encode'; audio: 'copy' | 'encode' | 'none'; segment: 'mpegts'; encoder: Encoder; hardware: boolean })
+  | { mode: 'unplayable'; reason: 'TRANSCODER_UNAVAILABLE' | 'NO_PLAYBACK_PATH' };
+
+export interface PlaybackOpts {
+  audioIndex?: number;
+  start?: number;
+  safe?: boolean;
+  attempt?: number;
+  forceHls?: boolean;
+}
 
 /** Audio codecs every browser engine we target decodes. */
 const BROWSER_AUDIO = new Set(['aac', 'mp3', 'opus', 'vorbis', 'flac']);
@@ -31,6 +60,55 @@ function videoOk(codec: string, pixFmt: string | undefined, caps: Caps): boolean
 
 function pickAudio(probe: Probe, audioIndex?: number): Probe['audio'][number] | undefined {
   return probe.audio.find((a) => a.index === audioIndex) ?? probe.audio.find((a) => a.isDefault) ?? probe.audio[0];
+}
+
+function copyableVideo(probe: Probe, caps: Caps, safe: boolean): boolean {
+  const v = probe.video;
+  if (!v) return true;
+  if (v.codec === 'h264') return !is10bit(v.pixFmt);
+  return !safe && v.codec === 'hevc' && caps.hevc;
+}
+
+function copyableAudio(probe: Probe, audioIndex: number | undefined, safe: boolean): boolean {
+  const a = pickAudio(probe, audioIndex);
+  return !a || HLS_COPY_AUDIO.has(a.codec) && (!safe || a.codec === 'aac');
+}
+
+/** A deterministic, I/O-free list of valid playback choices in preference order. */
+export function planPlayback(probe: Probe, caps: Caps, fileExt: string, server: ServerCaps, opts: PlaybackOpts = {}): PlaybackPlan {
+  const start = opts.start ?? 0;
+  const safe = opts.safe ?? false;
+  const attempt = opts.attempt ?? 0;
+  if (!Number.isInteger(attempt) || attempt < 0) throw new Error('attempt must be a non-negative integer');
+
+  const plans: PlaybackPlan[] = [];
+  if (!safe && start === 0 && canDirectPlay(probe, caps, fileExt, opts.audioIndex)) plans.push({ mode: 'direct' });
+  if (!server.ffmpeg || !server.hls) {
+    const index = opts.forceHls && plans[attempt]?.mode === 'direct' ? attempt + 1 : attempt;
+    if (plans[index]) return plans[index]!;
+    return { mode: 'unplayable', reason: server.ffmpeg ? 'NO_PLAYBACK_PATH' : 'TRANSCODER_UNAVAILABLE' };
+  }
+
+  const v = probe.video;
+  const a = pickAudio(probe, opts.audioIndex);
+  const videoCopy = copyableVideo(probe, caps, safe);
+  const audioCopy = copyableAudio(probe, opts.audioIndex, safe);
+  const segment = videoCopy && v?.codec === 'hevc' ? 'fmp4' : 'mpegts';
+  if (videoCopy && audioCopy) plans.push({ mode: 'remux', video: v ? 'copy' : 'none', audio: a ? 'copy' : 'none', segment });
+  if (videoCopy && a && !audioCopy) plans.push({ mode: 'hls', video: v ? 'copy' : 'none', audio: 'encode', segment });
+
+  if (v) {
+    const audio: 'copy' | 'encode' | 'none' = !a ? 'none' : audioCopy ? 'copy' : 'encode';
+    for (const encoder of (safe ? [] : server.encoders).filter((e) => e !== 'libx264')) {
+      plans.push({ mode: 'transcode', video: 'encode', audio, segment: 'mpegts', encoder, hardware: true });
+    }
+    if (server.encoders.includes('libx264')) {
+      plans.push({ mode: 'transcode', video: 'encode', audio, segment: 'mpegts', encoder: 'libx264', hardware: false });
+    }
+  }
+
+  const index = opts.forceHls && plans[attempt]?.mode === 'direct' ? attempt + 1 : attempt;
+  return plans[index] ?? { mode: 'unplayable', reason: 'NO_PLAYBACK_PATH' };
 }
 
 /**
@@ -70,6 +148,8 @@ export interface HlsOpts {
   segSeconds?: number;
 }
 
+type FfmpegPlan = Extract<PlaybackPlan, { mode: 'remux' | 'hls' | 'transcode' }>;
+
 function encoderArgs(enc: Encoder, height: number): string[] {
   const scale = height > 1080 ? ['-vf', 'scale=-2:1080'] : [];
   const gop = ['-g', '48', '-keyint_min', '48'];
@@ -85,20 +165,14 @@ function encoderArgs(enc: Encoder, height: number): string[] {
   }
 }
 
-/**
- * Path 2: the one ffmpeg command builder. Video and audio decide independently:
- * copy when the device can decode the stream and HLS can carry it, otherwise encode H.264 / AAC.
- * Remux, audio-only transcode and full transcode all fall out of this function.
- */
-export function buildHlsArgs(probe: Probe, caps: Caps, o: HlsOpts): HlsPlan {
+export function compileFfmpegArgs(plan: FfmpegPlan, probe: Probe, o: HlsOpts): string[] {
   const seg = o.segSeconds ?? 4;
   const v = probe.video;
   const a = pickAudio(probe, o.audioIndex);
-
-  let video: HlsPlan['video'] = 'none';
-  if (v) video = (v.codec === 'h264' && !is10bit(v.pixFmt)) || (v.codec === 'hevc' && caps.hevc) ? 'copy' : 'encode';
-  const segment: HlsPlan['segment'] = video === 'copy' && v?.codec === 'hevc' ? 'fmp4' : 'mpegts';
-  const audio: HlsPlan['audio'] = !a ? 'none' : HLS_COPY_AUDIO.has(a.codec) ? 'copy' : 'encode';
+  const video = plan.video;
+  const audio = plan.audio;
+  const segment = plan.segment;
+  const encoder = plan.mode === 'transcode' ? plan.encoder : o.encoder;
 
   const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y'];
   if (o.start > 0) args.push('-ss', o.start.toFixed(3));
@@ -111,7 +185,8 @@ export function buildHlsArgs(probe: Probe, caps: Caps, o: HlsOpts): HlsPlan {
     args.push('-c:v', 'copy');
     if (v?.codec === 'hevc') args.push('-tag:v', 'hvc1');
   } else if (video === 'encode') {
-    args.push(...encoderArgs(o.encoder, v!.height), '-force_key_frames', `expr:gte(t,n_forced*${seg})`);
+    if (!v) throw new Error('transcode plan requires video');
+    args.push(...encoderArgs(encoder, v.height), '-force_key_frames', `expr:gte(t,n_forced*${seg})`);
   }
   if (audio === 'copy') args.push('-c:a', 'copy');
   else if (audio === 'encode') args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2');
@@ -129,7 +204,26 @@ export function buildHlsArgs(probe: Probe, caps: Caps, o: HlsOpts): HlsPlan {
   const sep = o.outDir.endsWith('/') || o.outDir.endsWith('\\') ? '' : '/';
   if (segment === 'fmp4') args.push('-hls_fmp4_init_filename', 'init.mp4');
   args.push('-hls_segment_filename', `${o.outDir}${sep}seg_%05d.${segment === 'fmp4' ? 'm4s' : 'ts'}`, `${o.outDir}${sep}index.m3u8`);
-  return { args, video, audio, segment };
+  return args;
+}
+
+/**
+ * Path 2: the one ffmpeg command builder. Video and audio decide independently:
+ * copy when the device can decode the stream and HLS can carry it, otherwise encode H.264 / AAC.
+ * Remux, audio-only transcode and full transcode all fall out of this function.
+ */
+export function buildHlsArgs(probe: Probe, caps: Caps, o: HlsOpts): HlsPlan {
+  const hlsPlan: PlaybackPlan = planPlayback(probe, caps, '', {
+    ffmpeg: true,
+    ffprobe: true,
+    hls: true,
+    encoders: [o.encoder],
+  }, { start: o.start, audioIndex: o.audioIndex });
+  if (hlsPlan.mode === 'direct' || hlsPlan.mode === 'unplayable') throw new Error('expected an HLS playback plan');
+  const video: HlsPlan['video'] = hlsPlan.video === 'encode' ? 'encode' : hlsPlan.video;
+  const audio: HlsPlan['audio'] = hlsPlan.audio;
+  const segment = hlsPlan.segment;
+  return { args: compileFfmpegArgs(hlsPlan, probe, o), video, audio, segment };
 }
 
 /** ffmpeg args for a 1-second test encode used to pick a hardware encoder at startup. */

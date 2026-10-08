@@ -9,7 +9,7 @@ import { assetLoader } from './assets.ts';
 import { findBins, type Bins } from './bins.ts';
 import { ConfigFile } from './config.ts';
 import { healthReport } from './health.ts';
-import { HlsJobs, pickEncoder } from './hls.ts';
+import { HlsJobs, pickEncoders } from './hls.ts';
 import { HttpError } from './http.ts';
 import { lanAdapters } from './net.ts';
 import { Pairing } from './pairing.ts';
@@ -49,16 +49,17 @@ export function wire(o: WireOpts): Wired {
   const hls = bins.ffmpeg
     ? new HlsJobs({ ffmpeg: bins.ffmpeg, dir: join(o.dataDir, 'cache', 'hls'), maxJobs: cfg.maxJobs, cacheBytes: cfg.cacheGb * 1024 ** 3 })
     : null;
-  let encoder: Encoder | 'probing' = o.encoder ?? 'probing';
+  let encoders: Encoder[] = o.encoder ? [o.encoder, ...(o.encoder === 'libx264' ? [] : ['libx264' as Encoder])] : (bins.ffmpeg ? ['libx264' as Encoder] : []);
+  let encoder: Encoder | 'probing' = o.encoder ?? (bins.ffmpeg ? 'probing' : 'libx264');
   const currentEncoder = (): Encoder => (encoder === 'probing' ? 'libx264' : encoder);
 
   const scanner = new Scanner(db, bins.ffprobe);
   const registry = new Registry();
   registry.add(createHomeProvider(db, registry));
-  registry.add(createFsProvider({ db, scanner, ffmpeg: bins.ffmpeg, ffprobe: bins.ffprobe, hls, encoder: currentEncoder, cacheDir: join(o.dataDir, 'cache') }));
+  registry.add(createFsProvider({ db, scanner, ffmpeg: bins.ffmpeg, ffprobe: bins.ffprobe, hls, encoder: currentEncoder, encoders: () => encoders, cacheDir: join(o.dataDir, 'cache') }));
   const pairing = new Pairing(db);
   const adapters = () => lanAdapters(config.get().adapter);
-  const health = healthReport({ db, bins, hls, scanner, encoder: () => encoder, adapters, port: () => config.get().port, startedAt: Date.now() });
+  const health = healthReport({ db, bins, hls, scanner, encoder: () => currentEncoder(), encoders: () => encoders, adapters, port: () => config.get().port, startedAt: Date.now() });
 
   const admin: AdminApi = {
     async status() {
@@ -115,7 +116,12 @@ export function wire(o: WireOpts): Wired {
     hls,
     async start() {
       await hls?.sweepOrphans();
-      if (encoder === 'probing') void pickEncoder(bins.ffmpeg).then((e) => (encoder = e));
+      if (encoder === 'probing') {
+        void pickEncoders(bins.ffmpeg).then((found) => {
+          encoders = found;
+          encoder = found.find((e) => e !== 'libx264') ?? 'libx264';
+        });
+      }
       await scanner.setRoots(config.get().roots);
     },
     close() {

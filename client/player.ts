@@ -1,7 +1,9 @@
 // Video/audio player. Direct files play as-is; anything else is HLS from the server, with seeking
 // beyond what has been produced restarting the stream at an offset (?t=). One clock: offset + currentTime.
-import type { Item } from '../shared/types.ts';
-import { openUrl, saveState } from './api.ts';
+import { mediaMeta, type AudioTrackMeta, type Item, type SubtitleTrackMeta } from '../shared/types.ts';
+import { RESUME_MIN_SECONDS } from '../shared/watch.ts';
+import type { ErrorCode } from '../shared/errors.ts';
+import { beaconState, messageForError, openUrl, saveState } from './api.ts';
 import { clear, fmtTime, h, idleHider } from './dom.ts';
 import { icon } from './icons.ts';
 import { focus, isBackKey, isEnterKey, keyDir, move } from './nav.ts';
@@ -40,20 +42,6 @@ function loadHls(): Promise<HlsCtor> {
   return hlsLoading;
 }
 
-interface SubTrack {
-  id: string;
-  lang?: string;
-  title?: string;
-  forced?: boolean;
-}
-interface AudioTrack {
-  index: number;
-  codec: string;
-  channels: number;
-  lang?: string;
-  title?: string;
-  isDefault?: boolean;
-}
 interface Cue {
   start: number;
   end: number;
@@ -61,6 +49,7 @@ interface Cue {
 }
 
 const SEEK_STEP = 10;
+const MAX_PLAYBACK_FALLBACKS = 6;
 
 type MSE = { isTypeSupported(t: string): boolean };
 
@@ -94,11 +83,11 @@ const btn = (aria: string, ...content: (Node | string)[]): HTMLButtonElement =>
   h('button', { class: 'btn ctl', 'data-nav': true, type: 'button', 'aria-label': aria }, ...content);
 
 export function playMedia(item: Item, host: HTMLElement, onClose: () => void): () => void {
-  const meta = item.meta ?? {};
-  const duration = typeof meta.duration === 'number' ? meta.duration : 0;
-  const audioTracks = (Array.isArray(meta.audio) ? meta.audio : []) as AudioTrack[];
-  const subTracks = (Array.isArray(meta.subs) ? meta.subs : []) as SubTrack[];
-  const resume = typeof meta.position === 'number' && !meta.watched && meta.position > 5 ? meta.position : 0;
+  const meta = mediaMeta(item) ?? {};
+  const duration = meta.duration ?? 0;
+  const audioTracks: AudioTrackMeta[] = meta.audio ?? [];
+  const subTracks: SubtitleTrackMeta[] = meta.subs ?? [];
+  const resume = meta.position !== undefined && !meta.watched && meta.position > RESUME_MIN_SECONDS ? meta.position : 0;
 
   const video = h('video', { class: 'media', playsinline: true, autoplay: true });
   const textTrack = video.addTextTrack('subtitles', 'Subtitles');
@@ -129,7 +118,7 @@ export function playMedia(item: Item, host: HTMLElement, onClose: () => void): (
   let audioIndex: number | undefined;
   let cues: Cue[] = [];
   let closed = false;
-  let safe = false; // after a decode failure: ask the server for plain H.264/AAC
+  let attempt = 0;
   // While a restart is pending, the clock reads the target so repeated presses add up (+10, +10, ...).
   let pending: number | null = null;
   let restartTimer = 0;
@@ -163,24 +152,28 @@ export function playMedia(item: Item, host: HTMLElement, onClose: () => void): (
     const stale = (): boolean => my !== gen || closed;
     // HEAD tells us which path the server picked. redirect: 'manual' because a 302 already means
     // HLS; following it would start a throwaway conversion at t=0.
-    let direct: string | null = null;
+    let direct = false;
     try {
-      const res = await fetch(openUrl(item.id, { a: audioIndex, safe: safe ? 1 : undefined }), {
+      const res = await fetch(openUrl(item.id, { a: audioIndex, attempt: attempt || undefined }), {
         method: 'HEAD',
         credentials: 'same-origin',
         redirect: 'manual',
       });
       if (stale()) return;
       if (res.type !== 'opaqueredirect' && res.status === 401) return showError('This TV is no longer paired. Go back and pair again.');
-      if (res.type !== 'opaqueredirect' && !res.ok) return showError('This file cannot be played.');
-      if (res.type !== 'opaqueredirect') direct = res.url;
+      const mode = res.headers.get('X-HomeCast-Playback');
+      if (res.type !== 'opaqueredirect' && !res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { code?: ErrorCode };
+        return showError(messageForError(body.code) ?? 'This file cannot be played.');
+      }
+      direct = mode === 'direct' || (mode === null && res.type !== 'opaqueredirect' && res.ok && res.status !== 204);
     } catch {
       return showError('Cannot reach the PC.');
     }
-    hlsMode = direct === null;
+    hlsMode = !direct;
     if (hlsMode) {
       offset = Math.floor(at);
-      const url = openUrl(item.id, { hls: 'index.m3u8', t: offset, a: audioIndex, safe: safe ? 1 : undefined });
+      const url = openUrl(item.id, { hls: 'index.m3u8', t: offset, a: audioIndex, attempt: attempt || undefined });
       if (!useHlsJs()) video.src = url;
       else {
         let Hls: HlsCtor;
@@ -203,7 +196,7 @@ export function playMedia(item: Item, host: HTMLElement, onClose: () => void): (
       }
     } else {
       offset = 0;
-      video.src = direct!;
+      video.src = openUrl(item.id, { a: audioIndex });
       if (at > 0) video.addEventListener('loadedmetadata', () => (video.currentTime = at), { once: true });
     }
     pending = null; // offset is valid again
@@ -211,12 +204,12 @@ export function playMedia(item: Item, host: HTMLElement, onClose: () => void): (
     video.play().catch(() => undefined);
   }
 
-  /** The device could not decode what it said it could: retry once as H.264/AAC, then give up. */
+  /** Move to the next server-planned playback rung; each attempt is used at most once. */
   function fallback(g = gen): void {
     if (closed || g !== gen || failedGen === g) return; // one decision per load, however many error events
     failedGen = g;
-    if (safe) return showError('Playback failed. This TV cannot play this file.');
-    safe = true;
+    if (attempt >= MAX_PLAYBACK_FALLBACKS) return showError('Playback failed. This TV cannot play this file.');
+    attempt++;
     void load(now());
   }
 
@@ -245,10 +238,35 @@ export function playMedia(item: Item, host: HTMLElement, onClose: () => void): (
   }
 
   let lastSave = 0;
+  let saving = false;
+  let pendingSave: { position: number; duration: number } | null = null;
+
+  async function flushSave(): Promise<void> {
+    if (saving) return;
+    saving = true;
+    while (pendingSave) {
+      const current = pendingSave;
+      pendingSave = null;
+      await saveState(item.id, current.position, current.duration);
+    }
+    saving = false;
+  }
+
   function save(force = false): void {
     if (!force && Date.now() - lastSave < SAVE_EVERY_MS) return;
     lastSave = Date.now();
-    if (now() > 1) void saveState(item.id, now(), total());
+    if (now() > 1) {
+      pendingSave = { position: now(), duration: total() };
+      void flushSave();
+    }
+  }
+
+  function onPageHide(): void {
+    if (now() > 1) beaconState(item.id, now(), total());
+  }
+
+  function onVisibilityChange(): void {
+    if (document.visibilityState === 'hidden') save(true);
   }
 
   function render(): void {
@@ -274,7 +292,7 @@ export function playMedia(item: Item, host: HTMLElement, onClose: () => void): (
     return b;
   }
 
-  function loadSubs(s: SubTrack): void {
+  function loadSubs(s: SubtitleTrackMeta): void {
     fetch(openUrl(item.id, { track: s.id }), { credentials: 'same-origin' })
       .then((r) => (r.ok ? r.text() : Promise.reject(new Error('subtitle failed'))))
       .then((text) => {
@@ -364,6 +382,8 @@ export function playMedia(item: Item, host: HTMLElement, onClose: () => void): (
     clearInterval(tick);
     clearTimeout(restartTimer);
     document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
+    window.removeEventListener('pagehide', onPageHide);
     hls?.destroy();
     video.pause();
     video.removeAttribute('src');
@@ -398,13 +418,16 @@ export function playMedia(item: Item, host: HTMLElement, onClose: () => void): (
     save(true);
   });
   video.addEventListener('ended', () => {
-    void saveState(item.id, total(), total());
+    pendingSave = { position: total(), duration: total() };
+    void flushSave();
     close();
   });
   video.addEventListener('error', () => {
     if (video.getAttribute('src') || hls) fallback();
   });
   document.addEventListener('keydown', onKey, true);
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  window.addEventListener('pagehide', onPageHide);
   const tick = window.setInterval(render, 1000);
 
   focus(progress, false);

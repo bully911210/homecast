@@ -95,6 +95,7 @@ describe('HLS job start is atomic', () => {
       key: 'bad',
       group: 'bad',
       file: 'index.m3u8',
+      playbackMode: 'transcode',
       uri: (f) => f,
       args: () => ['-hide_banner', '-i', join(dir, 'does-not-exist.mkv'), '-f', 'hls', join(dir, 'x.m3u8')],
     });

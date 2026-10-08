@@ -11,6 +11,58 @@ export interface Item {
   meta?: Record<string, unknown>;
 }
 
+export interface VideoMeta extends Record<string, unknown> {
+  duration?: number;
+  position?: number;
+  watched?: boolean;
+  year?: number;
+  season?: number;
+  episode?: number;
+  episodeEnd?: number;
+  resolution?: string;
+  hdr?: string;
+  videoCodec?: string;
+  audioCodec?: string;
+  channels?: string;
+  tags?: string[];
+  width?: number;
+  height?: number;
+  audio?: AudioTrackMeta[];
+  subs?: SubtitleTrackMeta[];
+}
+
+export interface AudioTrackMeta {
+  index: number;
+  codec: string;
+  channels: number;
+  lang?: string;
+  title?: string;
+  isDefault?: boolean;
+}
+
+export interface SubtitleTrackMeta {
+  id: string;
+  lang?: string;
+  title?: string;
+  forced?: boolean;
+}
+
+export interface AudioMeta extends VideoMeta {}
+export interface ImageMeta extends Record<string, unknown> {}
+export interface FolderMeta extends Record<string, unknown> {
+  row?: boolean;
+  root?: boolean;
+  offline?: boolean;
+}
+
+export function isVideo(item: Item): item is Item & { kind: 'video'; meta?: VideoMeta } {
+  return item.kind === 'video';
+}
+
+export function mediaMeta(item: Item): VideoMeta | undefined {
+  return item.kind === 'video' || item.kind === 'audio' ? item.meta as VideoMeta | undefined : undefined;
+}
+
 /** What a paired device said it can decode natively (from canPlayType). */
 export interface Caps {
   h264: boolean;

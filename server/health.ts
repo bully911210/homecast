@@ -16,6 +16,7 @@ export interface HealthDeps {
   hls: HlsJobs | null;
   scanner: Scanner;
   encoder: () => string;
+  encoders?: () => readonly string[];
   adapters: () => Adapter[];
   port: () => number;
   startedAt: number;
@@ -41,6 +42,11 @@ export function healthReport(d: HealthDeps): (full: boolean) => Promise<unknown>
     const warnings: string[] = [];
     if (!d.bins.ffmpeg) warnings.push('ffmpeg was not found: only files the TV plays natively will work, and there are no thumbnails.');
     if (!d.bins.ffprobe) warnings.push('ffprobe was not found: files cannot be analysed.');
+    if (d.bins.ffmpeg && !(d.encoders?.() ?? []).some((e) => e !== 'libx264')) {
+      warnings.push((d.encoders?.() ?? []).includes('libx264')
+        ? 'No verified hardware encoder was found: conversion will use the CPU.'
+        : 'No compatible encoder was verified: some files cannot be converted.');
+    }
     if (!adapter) warnings.push('No home network adapter found. Connect to Wi-Fi or Ethernet, or set "adapter" in config.json.');
     if (profile?.category === 'Public') warnings.push(`Windows treats "${profile.alias}" as a Public network. Set it to Private in Settings > Network & internet, or TVs cannot connect.`);
     if (firewall?.allowedPublic) warnings.push('The firewall allows HomeCast on Public networks too. Untick "Public" in Windows Defender Firewall > Allowed apps.');
@@ -53,6 +59,7 @@ export function healthReport(d: HealthDeps): (full: boolean) => Promise<unknown>
       ffmpeg: d.bins.ffmpeg !== null,
       ffprobe: d.bins.ffprobe !== null,
       encoder: d.encoder(),
+      encoders: d.encoders?.() ?? [d.encoder()],
       activeJobs: d.hls?.activeJobs() ?? 0,
       cacheBytes: (await d.hls?.cacheBytes()) ?? 0,
       openStreams: openStreamCount(),

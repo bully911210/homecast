@@ -5,7 +5,7 @@ import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { log } from './log.ts';
-import { HW_ORDER, probeEncoderArgs, type Encoder } from './playback.ts';
+import { HW_ORDER, probeEncoderArgs, type Encoder, type PlaybackMode } from './playback.ts';
 import { run } from './run.ts';
 
 const FILE_RE = /^(index\.m3u8|init\.mp4|seg_\d{5}\.(ts|m4s))$/;
@@ -31,6 +31,7 @@ export interface HlsRequest {
   key: string; // unique per (item, device, start, audio track)
   group: string; // per (item, device): a new start offset replaces the old job
   file: string; // index.m3u8 | init.mp4 | seg_NNNNN.ts|m4s
+  playbackMode: Exclude<PlaybackMode, 'direct' | 'unplayable'>;
   uri: (file: string) => string; // absolute URL for a segment, used to rewrite the playlist
   args: (outDir: string) => string[];
 }
@@ -69,17 +70,22 @@ async function isFfmpeg(pid: number): Promise<boolean> {
   }
 }
 
-export async function pickEncoder(ffmpeg: string | null): Promise<Encoder> {
-  if (!ffmpeg) return 'libx264';
-  for (const enc of HW_ORDER) {
+export async function pickEncoders(ffmpeg: string | null): Promise<Encoder[]> {
+  if (!ffmpeg) return [];
+  const candidates: readonly Encoder[] = [...HW_ORDER, 'libx264'];
+  const available = await Promise.all(candidates.map(async (encoder) => {
     try {
-      const r = await run(ffmpeg, probeEncoderArgs(enc), 15_000);
-      if (r.code === 0) return enc;
+      return (await run(ffmpeg, probeEncoderArgs(encoder), 15_000)).code === 0;
     } catch {
-      // try the next one
+      return false;
     }
-  }
-  return 'libx264';
+  }));
+  return candidates.filter((_encoder, index) => available[index]);
+}
+
+export async function pickEncoder(ffmpeg: string | null): Promise<Encoder> {
+  const encoders = await pickEncoders(ffmpeg);
+  return encoders.find((e) => e !== 'libx264') ?? 'libx264';
 }
 
 export class HlsJobs {
@@ -173,7 +179,7 @@ export class HlsJobs {
         .join('\n')
         // A growing EVENT playlist looks live; tell players to start at the beginning, not the live edge.
         .replace('#EXTM3U', '#EXTM3U\n#EXT-X-START:TIME-OFFSET=0,PRECISE=YES');
-      return new Response(body, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache' } });
+      return new Response(body, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache', 'X-HomeCast-Playback': req.playbackMode } });
     }
     const st = await stat(path);
     const rs = createReadStream(path);
@@ -182,6 +188,7 @@ export class HlsJobs {
         'Content-Type': req.file.endsWith('.ts') ? 'video/mp2t' : 'video/mp4',
         'Content-Length': String(st.size),
         'Cache-Control': 'private, max-age=3600',
+        'X-HomeCast-Playback': req.playbackMode,
       },
     });
   }

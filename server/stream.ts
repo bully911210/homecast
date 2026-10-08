@@ -50,6 +50,7 @@ function nodeToWeb(path: string, start: number, end: number): ReadableStream<Uin
 export interface ServeOpts {
   contentType: string;
   cacheControl?: string;
+  playbackMode?: 'direct';
 }
 
 export async function serveFile(req: Request, path: string, opts: ServeOpts): Promise<Response> {
@@ -63,6 +64,7 @@ export async function serveFile(req: Request, path: string, opts: ServeOpts): Pr
     'Last-Modified': st.mtime.toUTCString(),
     'Cache-Control': opts.cacheControl ?? 'private, no-cache',
   };
+  if (opts.playbackMode) base['X-HomeCast-Playback'] = opts.playbackMode;
 
   const inm = req.headers.get('if-none-match');
   if (inm && inm.split(',').some((t) => t.trim() === etag || t.trim() === '*')) {

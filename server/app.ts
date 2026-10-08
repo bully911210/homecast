@@ -92,7 +92,7 @@ export function buildApp(d: AppDeps): Hono<Env> {
   });
 
   app.onError((err, c) => {
-    if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
+    if (err instanceof HttpError) return c.json({ error: err.message, ...(err.code ? { code: err.code } : {}) }, err.status as 400);
     log.error(`${c.req.method} ${c.req.path} failed`, err);
     return c.json({ error: 'internal error' }, 500);
   });
@@ -133,7 +133,7 @@ export function buildApp(d: AppDeps): Hono<Env> {
   // ---- auth for the item API ----
   app.use('/api/*', async (c, next) => {
     const device = d.pairing.authenticate(readCookie(c.req.header('cookie'), COOKIE));
-    if (!device) return c.json({ error: 'not paired' }, 401);
+    if (!device) return c.json({ error: 'not paired', code: 'PAIRING_REQUIRED' }, 401);
     c.set('device', device);
     await next();
   });
