@@ -69,6 +69,42 @@ describe('HLS job manager', () => {
   });
 });
 
+describe('HLS job start is atomic', () => {
+  it('five simultaneous requests for one stream start exactly one ffmpeg', async () => {
+    const s = await startTestServer({ roots: [FIXTURE_DIR] });
+    const cookie = await s.pair({ h264: true });
+    const root = ((await (await s.get('/api/items', cookie)).json()) as { items: Item[] }).items.find((i) => i.meta?.root)!;
+    const top = ((await (await s.get(`/api/items?parent=${root.id}`, cookie)).json()) as { items: Item[] }).items;
+    const long = top.find((i) => i.title === 'Long')!;
+    const movie = ((await (await s.get(`/api/items?parent=${long.id}`, cookie)).json()) as { items: Item[] }).items[0]!;
+    const pids = new Set<number>();
+    const reqs = Array.from({ length: 5 }, () => s.get(`/api/open/${movie.id}?hls=index.m3u8&t=7`, cookie).then((r) => r.text()));
+    const poll = setInterval(() => s.w.hls!.pids().forEach((p) => pids.add(p)), 10);
+    const bodies = await Promise.all(reqs);
+    clearInterval(poll);
+    s.w.hls!.pids().forEach((p) => pids.add(p));
+    expect(bodies.every((b) => b.includes('#EXTINF'))).toBe(true);
+    expect(pids.size).toBe(1);
+    await s.close();
+  });
+
+  it('error responses never contain server paths', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'homecast-err-'));
+    const jobs = new HlsJobs({ ffmpeg: findBins().ffmpeg!, dir, maxJobs: 2, cacheBytes: 1e9 });
+    const res = await jobs.serve({
+      key: 'bad',
+      group: 'bad',
+      file: 'index.m3u8',
+      uri: (f) => f,
+      args: () => ['-hide_banner', '-i', join(dir, 'does-not-exist.mkv'), '-f', 'hls', join(dir, 'x.m3u8')],
+    });
+    expect(res.status).toBe(500);
+    expect(await res.text()).not.toContain(dir);
+    jobs.killAll();
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('orphan sweep after a crash', () => {
   it('kills ffmpeg processes recorded by a previous run', async () => {
     const { ffmpeg } = findBins();

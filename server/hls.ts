@@ -85,6 +85,7 @@ export async function pickEncoder(ffmpeg: string | null): Promise<Encoder> {
 export class HlsJobs {
   readonly #o: HlsOptions;
   readonly #jobs = new Map<string, Job>();
+  readonly #starting = new Map<string, Promise<Job>>();
   readonly #pidFile: string;
   readonly #reaper: NodeJS.Timeout;
 
@@ -140,15 +141,29 @@ export class HlsJobs {
     if (!isHlsFile(req.file)) return new Response('bad hls file', { status: 400 });
     const dir = join(this.#o.dir, safeKey(req.key));
     let job = this.#jobs.get(req.key);
+    // A failed job is forgotten so the next request tries again (the client gives up after one retry).
+    if (job?.exited && job.exitCode !== 0) {
+      this.#jobs.delete(req.key);
+      job = undefined;
+    }
     const complete = !job && existsSync(join(dir, 'index.m3u8')) && readFileSync(join(dir, 'index.m3u8'), 'utf8').includes('#EXT-X-ENDLIST');
-    if (!job && !complete) job = await this.#start(req, dir);
+    if (!job && !complete) {
+      // Concurrent requests for the same key share one start, so no ffmpeg ever goes untracked.
+      let starting = this.#starting.get(req.key);
+      if (!starting) {
+        starting = this.#start(req, dir).finally(() => this.#starting.delete(req.key));
+        this.#starting.set(req.key, starting);
+      }
+      job = await starting;
+    }
     if (job) job.lastAccess = Date.now();
 
     const path = join(dir, req.file);
     const ready = await this.#waitFor(path, job, req.file === 'index.m3u8');
     if (!ready) {
-      const reason = job?.exited && job.exitCode !== 0 ? `ffmpeg failed: ${job.stderr.slice(-300)}` : 'segment not available';
-      return new Response(reason, { status: job?.exited && job.exitCode !== 0 ? 500 : 404 });
+      // ffmpeg's stderr stays in the server log: it contains file paths the client must never see.
+      const failed = job?.exited === true && job.exitCode !== 0;
+      return new Response(failed ? 'conversion failed' : 'segment not available', { status: failed ? 500 : 404 });
     }
     if (req.file === 'index.m3u8') {
       const text = await readFile(path, 'utf8');
@@ -180,15 +195,15 @@ export class HlsJobs {
   }
 
   async #start(req: HlsRequest, dir: string): Promise<Job> {
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    await this.#evict();
+    // From here to #jobs.set there is no await, so concurrent starts can't both pass the cap.
     // A new start offset for the same item+device replaces the old job (that's a seek).
     for (const j of [...this.#jobs.values()]) if (j.group === req.group) this.#kill(j);
     // Over the cap: evict the least recently used job.
     const live = [...this.#jobs.values()].filter((j) => !j.exited).sort((a, b) => a.lastAccess - b.lastAccess);
     while (live.length >= this.#o.maxJobs) this.#kill(live.shift()!);
-
-    await rm(dir, { recursive: true, force: true });
-    await mkdir(dir, { recursive: true });
-    await this.#evict();
     const proc = spawn(this.#o.ffmpeg, req.args(dir), { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
     const job: Job = { key: req.key, group: req.group, dir, proc, lastAccess: Date.now(), exited: false, exitCode: null, stderr: '' };
     proc.stderr?.on('data', (b: Buffer) => {

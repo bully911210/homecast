@@ -1,6 +1,7 @@
 ﻿# HomeCast tray light: GREEN = server answering, RED = off. Built-in .NET only, no files to install.
 # Started detached by homecast.exe so it keeps working (and turns red) if the server dies.
-param([int]$Port = 8096, [string]$Start = '', [string]$Cwd = '', [string]$StateFile = '')
+# Paths come from the environment (set by homecast.exe) so no path is ever re-parsed on a command line.
+param([int]$Port = 8096, [string]$Start = $env:HOMECAST_TRAY_START, [string]$Cwd = $env:HOMECAST_TRAY_CWD, [string]$StateFile = '')
 
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 $created = $false

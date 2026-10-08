@@ -1,7 +1,7 @@
 // Windows integration using only built-in tools: reg.exe, PowerShell, explorer. No admin rights needed.
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { isSea } from 'node:sea';
 import { log } from './log.ts';
 import { run } from './run.ts';
@@ -13,7 +13,7 @@ const VALUE = 'HomeCast';
 /** The command that starts this server again (the exe itself, or node + entry script in dev). */
 export function selfCommand(): { exe: string; args: string[] } {
   if (isSea()) return { exe: process.execPath, args: [] };
-  return { exe: process.execPath, args: [process.argv[1] ?? 'server/main.ts'] };
+  return { exe: process.execPath, args: [resolve(process.argv[1] ?? 'server/main.ts')] };
 }
 
 function quoted(): string {
@@ -38,8 +38,9 @@ export async function setAutostart(on: boolean): Promise<void> {
   if (r.code !== 0 && on) throw new Error(`could not update the Run key: ${r.stderr.trim()}`);
 }
 
-async function powershellJson(script: string): Promise<unknown> {
-  const r = await run('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], 15_000);
+/** Values reach PowerShell through the environment, never spliced into the script text. */
+async function powershellJson(script: string, env: Record<string, string> = {}): Promise<unknown> {
+  const r = await run('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], 15_000, env);
   const text = r.stdout.toString('utf8').trim();
   return text ? JSON.parse(text) : null;
 }
@@ -75,13 +76,12 @@ export interface FirewallState {
 /** Inspect inbound firewall rules for this program (Windows creates them from its first-run prompt). */
 export async function firewallState(): Promise<FirewallState | null> {
   if (!WIN) return null;
-  const program = process.execPath.replace(/'/g, "''");
   const script =
-    `$r = Get-NetFirewallApplicationFilter -Program '${program}' -ErrorAction SilentlyContinue | Get-NetFirewallRule -ErrorAction SilentlyContinue | ` +
+    `$r = Get-NetFirewallApplicationFilter -Program $env:HOMECAST_PROGRAM -ErrorAction SilentlyContinue | Get-NetFirewallRule -ErrorAction SilentlyContinue | ` +
     `Where-Object { $_.Direction -eq 'Inbound' -and $_.Enabled -eq 'True' } | Select-Object @{n='p';e={[string]$_.Profile}},@{n='a';e={[string]$_.Action}}; ` +
     `if ($r) { $r | ConvertTo-Json -Compress } else { '[]' }`;
   try {
-    const raw = await powershellJson(script);
+    const raw = await powershellJson(script, { HOMECAST_PROGRAM: process.execPath });
     const rules = (Array.isArray(raw) ? raw : raw ? [raw] : []) as { p: string; a: string }[];
     const has = (profile: string, action: string): boolean => rules.some((r) => r.a === action && (r.p === 'Any' || r.p.includes(profile)));
     return { allowedPrivate: has('Private', 'Allow'), allowedPublic: has('Public', 'Allow'), blocked: has('Private', 'Block'), rules: rules.length };
@@ -106,15 +106,21 @@ export function startTray(port: number): void {
   const script = candidates.find((p) => existsSync(p));
   if (!script) return;
   const { exe, args } = selfCommand();
-  const startCmd = [exe, ...args].join('|');
-  const q = (s: string): string => `"${s.replace(/"/g, '')}"`;
   // Windows PowerShell 5.1 exits at once when started without a console (detached), and a
   // non-detached child dies with us (libuv job object). `start` gives it its own console.
+  // Paths travel in environment variables: cmd expands %VAR% once and never re-parses the value,
+  // so quotes, %, & and trailing backslashes in install paths can't break the command line.
+  const env = {
+    ...process.env,
+    HOMECAST_TRAY_SCRIPT: script,
+    HOMECAST_TRAY_START: [exe, ...args].join('|'),
+    HOMECAST_TRAY_CWD: process.cwd(),
+  };
   const line =
     `start "HomeCast tray" /min powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass ` +
-    `-File ${q(script)} -Port ${port} -Start ${q(startCmd)} -Cwd ${q(process.cwd())}`;
+    `-File "%HOMECAST_TRAY_SCRIPT%" -Port ${Math.floor(port)}`;
   try {
-    spawn('cmd.exe', ['/d', '/s', '/c', `"${line}"`], { detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true }).unref();
+    spawn('cmd.exe', ['/d', '/s', '/c', `"${line}"`], { env, detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true }).unref();
   } catch (err) {
     log.warn('could not start the tray icon', err instanceof Error ? err.message : err);
   }

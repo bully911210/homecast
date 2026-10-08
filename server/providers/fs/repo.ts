@@ -123,3 +123,15 @@ export function countItems(db: Database): { files: number; broken: number; pendi
     .get() as { files: number | null; broken: number | null; pending: number | null };
   return { files: r.files ?? 0, broken: r.broken ?? 0, pending: r.pending ?? 0 };
 }
+
+/**
+ * A folder (or file) could not be read this scan: keep its existing rows alive instead of letting
+ * the sweep delete them, so a disk hiccup never re-mints IDs and loses watch history.
+ * Returns true when anything was kept.
+ */
+export function keepSubtree(db: Database, rootId: string, rel: string, scanId: number): boolean {
+  const res = db
+    .prepare(`UPDATE fs_items SET scan_id = ? WHERE root_id = ? AND (rel = ? OR substr(rel, 1, length(?) + 1) = ? || '/')`)
+    .run(scanId, rootId, rel, rel, rel);
+  return Number(res.changes) > 0;
+}

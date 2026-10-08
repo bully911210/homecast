@@ -86,6 +86,8 @@ export function buildApp(d: AppDeps): Hono<Env> {
     c.set('remote', remote);
     await next();
     c.header('X-Content-Type-Options', 'nosniff');
+    c.header('X-Frame-Options', 'DENY'); // no clickjacking of the admin page
+    c.header('Content-Security-Policy', "frame-ancestors 'none'");
     c.header('Referrer-Policy', 'no-referrer');
   });
 

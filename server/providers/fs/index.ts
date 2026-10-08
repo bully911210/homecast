@@ -57,7 +57,7 @@ function toItem(row: FsRow): Item {
   if (probe) {
     meta.duration = probe.duration;
     if (probe.video) Object.assign(meta, { width: probe.video.width, height: probe.video.height, videoCodec: probe.video.codec });
-    meta.audio = probe.audio.map((a) => ({ index: a.index, codec: a.codec, channels: a.channels, lang: a.lang, title: a.title }));
+    meta.audio = probe.audio.map((a) => ({ index: a.index, codec: a.codec, channels: a.channels, lang: a.lang, title: a.title, isDefault: a.isDefault }));
     const embedded = probe.subs.filter((s) => TEXT_SUB_CODECS.has(s.codec)).map((s) => ({ id: `s${s.index}`, lang: s.lang, title: s.title, forced: s.forced }));
     const side = sidecarsOf(row).map((s, i) => ({ id: `f${i}`, lang: s.lang, title: s.file, forced: s.forced }));
     meta.subs = [...embedded, ...side];
@@ -129,12 +129,15 @@ export function createFsProvider(d: FsDeps): ProviderWithGet {
     if (!d.hls || !d.ffmpeg) throw new HttpError(503, 'ffmpeg is not available, so this file cannot be converted');
     const t = Math.floor(start);
     const suffix = `${audioIndex !== undefined ? `&a=${audioIndex}` : ''}${safe ? '&safe=1' : ''}`;
+    // The key covers everything that changes the output: file version, start, track, codec choice.
+    const variant = `${Math.floor(row.mtime_ms).toString(36)}-${t}-${audioIndex ?? 'd'}-${caps.hevc ? 'h' : 'x'}${safe ? 's' : ''}`;
     return d.hls.serve({
-      key: `${row.id}-${ctx.device.id}-${t}-${audioIndex ?? 'd'}${safe ? '-s' : ''}`,
+      key: `${row.id}-${ctx.device.id}-${variant}`,
       group: `${row.id}-${ctx.device.id}`,
       file: hlsFile,
       uri: (f) => `/api/open/fs:${row.id}?hls=${f}&t=${t}${suffix}`,
-      args: (outDir) => buildHlsArgs(probe, caps, { input: path, outDir, start: t, audioIndex, encoder: d.encoder() }).args,
+      // Safe mode also avoids the hardware encoder, in case that is what failed.
+      args: (outDir) => buildHlsArgs(probe, caps, { input: path, outDir, start: t, audioIndex, encoder: safe ? 'libx264' : d.encoder() }).args,
     });
   }
 
@@ -149,28 +152,26 @@ export function createFsProvider(d: FsDeps): ProviderWithGet {
 
   async function openSub(row: FsRow, ctx: OpenCtx): Promise<Response> {
     const track = ctx.query.get('track') ?? '';
-    const cacheFile = join(d.cacheDir, 'subs', `${row.id}-${Math.floor(row.mtime_ms)}-${track.replace(/[^a-z0-9]/g, '')}.vtt`);
-    const vtt = (text: string): Response => new Response(text, { headers: { 'Content-Type': 'text/vtt; charset=utf-8', 'Cache-Control': 'private, max-age=3600' } });
-    if (existsSync(cacheFile)) return vtt(await readFile(cacheFile, 'utf8'));
-    const path = await locate(row);
-    let text: string;
+    const vtt = (text: string): Response => new Response(text, { headers: { 'Content-Type': 'text/vtt; charset=utf-8', 'Cache-Control': 'private, no-cache' } });
     const emb = track.match(/^s(\d{1,4})$/);
     const side = track.match(/^f(\d{1,3})$/);
-    if (emb) {
-      const idx = Number(emb[1]);
-      const s = parseProbe(row)?.subs.find((x) => x.index === idx && TEXT_SUB_CODECS.has(x.codec));
-      if (!s || !d.ffmpeg) throw notFound('unknown subtitle track');
-      text = await embeddedToVtt(d.ffmpeg, path, idx);
-    } else if (side) {
+    if (side) {
+      // Sidecars convert in-process in milliseconds: read fresh every time, so edits show up at once.
       const sc = sidecarsOf(row)[Number(side[1])];
       const real = d.scanner.rootReal(row.root_id);
       const dirRel = row.rel.includes('/') ? row.rel.slice(0, row.rel.lastIndexOf('/') + 1) : '';
       const subPath = sc && real ? await resolveInJail(real, dirRel + sc.file) : null;
       if (!subPath) throw notFound('unknown subtitle track');
-      text = await sidecarToVtt(subPath);
-    } else {
-      throw new HttpError(400, 'bad track');
+      return vtt(await sidecarToVtt(subPath));
     }
+    if (!emb) throw new HttpError(400, 'bad track');
+    // Embedded tracks need an ffmpeg pass over the whole file: cache per file version.
+    const idx = Number(emb[1]);
+    const cacheFile = join(d.cacheDir, 'subs', `${row.id}-${Math.floor(row.mtime_ms)}-s${idx}.vtt`);
+    if (existsSync(cacheFile)) return vtt(await readFile(cacheFile, 'utf8'));
+    const s = parseProbe(row)?.subs.find((x) => x.index === idx && TEXT_SUB_CODECS.has(x.codec));
+    if (!s || !d.ffmpeg) throw notFound('unknown subtitle track');
+    const text = await embeddedToVtt(d.ffmpeg, await locate(row), idx);
     await mkdir(join(d.cacheDir, 'subs'), { recursive: true });
     await writeFile(cacheFile, text);
     return vtt(text);

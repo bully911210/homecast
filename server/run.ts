@@ -7,9 +7,9 @@ export interface RunResult {
   stderr: string;
 }
 
-export function run(bin: string, args: readonly string[], timeoutMs: number): Promise<RunResult> {
+export function run(bin: string, args: readonly string[], timeoutMs: number, env?: Record<string, string>): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: env ? { ...process.env, ...env } : process.env });
     const out: Buffer[] = [];
     let err = '';
     const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);

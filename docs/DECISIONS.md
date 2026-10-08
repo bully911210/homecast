@@ -64,3 +64,10 @@ Every dependency and every non-obvious choice, one line each. The rule: platform
 
 - Node SEA: esbuild bundles the server into one CJS file, the client files are SEA assets, and `postject` injects the blob into a copy of `node.exe`. ffmpeg/ffprobe sit beside the exe.
 - The exe is not code-signed, so SmartScreen shows "More info → Run anyway". The first-run notes say so.
+
+## Known limits
+
+- **Seek clock drift with copied video.** Seeking restarts ffmpeg with an input `-ss`. With `-c:v copy`, the stream starts at the keyframe before the target, so after a seek the clock, saved position and subtitles can be off by up to one GOP (usually 2 to 5 s). Transcoded streams are exact.
+- **No in-app control of the Start server item.** The tray's "Start server" menu item is not covered by automated tests (it needs a UI click); restarting via the exe is.
+- **Clean VM install time not measured.** The "unzip to playing in under 3 minutes on a clean Windows 11 VM" check has not been timed on a clean VM. On the development PC, the exe listens 3 s after launch.
+- **Not code-signed.** SmartScreen asks once.

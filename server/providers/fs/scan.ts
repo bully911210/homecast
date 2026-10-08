@@ -36,7 +36,7 @@ export interface ScanStatus {
   offlineRoots: string[];
 }
 
-type Watcher = FSWatcher | NodeJS.Timeout;
+type Watcher = { kind: 'watch'; w: FSWatcher } | { kind: 'poll'; t: NodeJS.Timeout };
 
 export class Scanner {
   readonly #db: Database;
@@ -137,7 +137,7 @@ export class Scanner {
       // Offline drive or deleted folder: keep the index, show it as offline, retry by polling.
       log.warn(`root offline: ${entry.root.path}`, err instanceof Error ? err.message : err);
       entry.real = null;
-      this.#watch(rootId, null);
+      if (this.#roots.get(rootId) === entry) this.#watch(rootId, null);
       return;
     }
     entry.real = real;
@@ -146,6 +146,7 @@ export class Scanner {
     const rootRow = { rel: '', parentId: null, kind: 'folder', title: basename(real) || real, size: 0, mtimeMs: 0 };
     const rootRowId = tx(this.#db, () => repo.upsert(this.#db, rootId, scanId, rootRow).id);
     await this.#walk(rootId, scanId, real, '', rootRowId, toProbe);
+    if (this.#roots.get(rootId) !== entry) return; // root removed or replaced while we walked
     const removed = repo.sweep(this.#db, rootId, scanId);
     log.info(`scanned ${entry.root.path}: ${toProbe.length} to probe, ${removed} removed`);
     this.#watch(rootId, real);
@@ -165,12 +166,15 @@ export class Scanner {
     try {
       dirents = await readdir(abs, { withFileTypes: true });
     } catch (err) {
-      log.warn(`cannot read ${abs}`, err instanceof Error ? err.message : err);
-      return false;
+      // Unreadable right now (drive hiccup, antivirus lock): keep what we knew instead of sweeping it.
+      if (rel === '') throw new Error(`root unreadable, scan aborted without changes: ${String(err)}`);
+      log.warn(`cannot read ${abs}, keeping its previous index`, err instanceof Error ? err.message : err);
+      return repo.keepSubtree(this.#db, rootId, rel, scanId);
     }
     const names = dirents.map((d) => d.name);
     const files: { entry: repo.Entry; abs: string }[] = [];
     const dirs: { name: string; rel: string }[] = [];
+    let kept = false;
     for (const d of dirents) {
       // Symlinks and junctions are skipped: the jail would refuse anything they point outside of anyway.
       if (IGNORE_RE.test(d.name) || d.isSymbolicLink()) continue;
@@ -186,6 +190,7 @@ export class Scanner {
       try {
         st = await stat(fileAbs);
       } catch {
+        if (repo.keepSubtree(this.#db, rootId, childRel, scanId)) kept = true;
         continue;
       }
       const sidecars =
@@ -199,7 +204,7 @@ export class Scanner {
         if (r.needsProbe) toProbe.push({ id: r.id, path: f.abs });
       }
     });
-    let hasMedia = files.length > 0;
+    let hasMedia = files.length > 0 || kept;
     for (const d of dirs) {
       const folder = { rel: d.rel, parentId, kind: 'folder', title: d.name, size: 0, mtimeMs: 0 };
       const id = tx(this.#db, () => repo.upsert(this.#db, rootId, scanId, folder).id);
@@ -237,8 +242,12 @@ export class Scanner {
   }
 
   #watch(rootId: string, real: string | null): void {
-    if (this.#watchers.has(rootId)) return;
     const isUnc = real?.startsWith('\\\\') ?? false;
+    const existing = this.#watchers.get(rootId);
+    // A root that was offline is being polled; once it is back on a local drive, switch to a real watch.
+    if (existing?.kind === 'watch') return;
+    if (existing && (!real || isUnc)) return;
+    if (existing) this.#unwatch(rootId);
     if (real && !isUnc) {
       try {
         const w = watch(real, { recursive: true, persistent: false }, () => this.#schedule(rootId));
@@ -247,7 +256,7 @@ export class Scanner {
           this.#unwatch(rootId);
           this.#poll(rootId);
         });
-        this.#watchers.set(rootId, w);
+        this.#watchers.set(rootId, { kind: 'watch', w });
         return;
       } catch (err) {
         log.warn(`fs.watch unavailable for ${real}, polling`, err instanceof Error ? err.message : err);
@@ -259,14 +268,14 @@ export class Scanner {
   #poll(rootId: string): void {
     const t = setInterval(() => void this.scan(rootId), POLL_MS);
     t.unref();
-    this.#watchers.set(rootId, t);
+    this.#watchers.set(rootId, { kind: 'poll', t });
   }
 
   #unwatch(rootId: string): void {
     const w = this.#watchers.get(rootId);
     if (!w) return;
-    if ('close' in w) w.close();
-    else clearInterval(w);
+    if (w.kind === 'watch') w.w.close();
+    else clearInterval(w.t);
     this.#watchers.delete(rootId);
   }
 }

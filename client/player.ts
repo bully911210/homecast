@@ -9,7 +9,7 @@ interface HlsLike {
   loadSource(u: string): void;
   attachMedia(v: HTMLMediaElement): void;
   destroy(): void;
-  on(event: string, fn: (event: string, data: { fatal?: boolean }) => void): void;
+  on(event: string, fn: (event: string, data: { fatal?: boolean; type?: string }) => void): void;
 }
 interface HlsCtor {
   new (cfg?: object): HlsLike;
@@ -28,8 +28,12 @@ function loadHls(): Promise<HlsCtor> {
     new Promise((resolve, reject) => {
       const s = document.createElement('script');
       s.src = '/assets/hls.min.js';
-      s.onload = () => (window.Hls ? resolve(window.Hls) : reject(new Error('hls.js failed to load')));
-      s.onerror = () => reject(new Error('hls.js failed to load'));
+      const fail = (): void => {
+        hlsLoading = null; // let the next play try again instead of caching the failure
+        reject(new Error('hls.js failed to load'));
+      };
+      s.onload = () => (window.Hls ? resolve(window.Hls) : fail());
+      s.onerror = fail;
       document.head.appendChild(s);
     });
   return hlsLoading;
@@ -47,6 +51,7 @@ interface AudioTrack {
   channels: number;
   lang?: string;
   title?: string;
+  isDefault?: boolean;
 }
 interface Cue {
   start: number;
@@ -143,52 +148,72 @@ export function playMedia(item: Item, host: HTMLElement, onClose: () => void): (
     }
   }
 
+  // Every load() gets a generation; anything that finishes for an older one is dropped,
+  // so overlapping loads (seek, then audio switch) never leave a second stream attached.
+  let gen = 0;
+  let failedGen = -1;
+  let netRetries = 0;
+
   async function load(at: number): Promise<void> {
+    const my = ++gen;
     status.classList.remove('show');
     hls?.destroy();
     hls = null;
-    // HEAD tells us which path the server picked: the file itself, or a redirect to an HLS playlist.
-    let finalUrl: string;
+    const stale = (): boolean => my !== gen || closed;
+    // HEAD tells us which path the server picked. redirect: 'manual' because a 302 already means
+    // HLS; following it would start a throwaway conversion at t=0.
+    let direct: string | null = null;
     try {
-      const res = await fetch(openUrl(item.id, { a: audioIndex, safe: safe ? 1 : undefined }), { method: 'HEAD', credentials: 'same-origin' });
-      if (res.status === 401) return showError('This TV is no longer paired. Go back and pair again.');
-      if (!res.ok) return showError('This file cannot be played.');
-      finalUrl = res.url;
+      const res = await fetch(openUrl(item.id, { a: audioIndex, safe: safe ? 1 : undefined }), {
+        method: 'HEAD',
+        credentials: 'same-origin',
+        redirect: 'manual',
+      });
+      if (stale()) return;
+      if (res.type !== 'opaqueredirect' && res.status === 401) return showError('This TV is no longer paired. Go back and pair again.');
+      if (res.type !== 'opaqueredirect' && !res.ok) return showError('This file cannot be played.');
+      if (res.type !== 'opaqueredirect') direct = res.url;
     } catch {
       return showError('Cannot reach the PC.');
     }
-    if (closed) return;
-    hlsMode = finalUrl.indexOf('hls=') !== -1;
+    hlsMode = direct === null;
     if (hlsMode) {
       offset = Math.floor(at);
       const url = openUrl(item.id, { hls: 'index.m3u8', t: offset, a: audioIndex, safe: safe ? 1 : undefined });
       if (!useHlsJs()) video.src = url;
       else {
+        let Hls: HlsCtor;
         try {
-          const Hls = await loadHls();
-          if (closed) return;
-          hls = new Hls({ maxBufferLength: 30, startPosition: 0 });
-          hls.on('hlsError', (_e, data) => {
-            if (data.fatal) fallback();
-          });
-          hls.loadSource(url);
-          hls.attachMedia(video);
+          Hls = await loadHls();
         } catch {
           return showError('This browser cannot play converted video.');
         }
+        if (stale()) return;
+        const h = new Hls({ maxBufferLength: 30, startPosition: 0 });
+        hls = h;
+        h.on('hlsError', (_e, data) => {
+          if (!data.fatal || my !== gen) return;
+          if (data.type === 'mediaError') fallback(my); // could not decode: try plain H.264/AAC
+          else if (netRetries++ < 2) void load(now()); // network/job hiccup: same settings again
+          else showError('Lost the connection to the PC.');
+        });
+        h.loadSource(url);
+        h.attachMedia(video);
       }
     } else {
       offset = 0;
-      video.src = finalUrl;
+      video.src = direct!;
       if (at > 0) video.addEventListener('loadedmetadata', () => (video.currentTime = at), { once: true });
     }
+    pending = null; // offset is valid again
     applyCues();
     video.play().catch(() => undefined);
   }
 
   /** The device could not decode what it said it could: retry once as H.264/AAC, then give up. */
-  function fallback(): void {
-    if (closed) return;
+  function fallback(g = gen): void {
+    if (closed || g !== gen || failedGen === g) return; // one decision per load, however many error events
+    failedGen = g;
     if (safe) return showError('Playback failed. This TV cannot play this file.');
     safe = true;
     void load(now());
@@ -258,16 +283,19 @@ export function playMedia(item: Item, host: HTMLElement, onClose: () => void): (
     clear(menu);
     const audioCol = h('div', { class: 'col' }, h('h3', { text: 'Audio' }));
     if (audioTracks.length === 0) audioCol.appendChild(h('p', { text: 'Default' }));
-    audioTracks.forEach((a, i) => {
+    // "No choice" means the file's default track (the server picks it the same way), not the first one.
+    const defaultIndex = (audioTracks.find((a) => a.isDefault) ?? audioTracks[0])?.index;
+    for (const a of audioTracks) {
       const label = `${a.lang ? a.lang.toUpperCase() + ' ' : ''}${a.title ?? ''} ${a.codec} ${a.channels}ch`.trim();
-      const active = audioIndex === undefined ? i === 0 : audioIndex === a.index;
+      const active = (audioIndex ?? defaultIndex) === a.index;
       audioCol.appendChild(
         pick(label, active, () => {
-          audioIndex = i === 0 ? undefined : a.index;
+          // Keep the default as "no choice" so direct play stays possible for it.
+          audioIndex = a.index === defaultIndex ? undefined : a.index;
           void load(now());
         }),
       );
-    });
+    }
     const subCol = h('div', { class: 'col' }, h('h3', { text: 'Subtitles' }));
     subCol.appendChild(pick('Off', textTrack.mode !== 'showing', () => (textTrack.mode = 'hidden')));
     for (const s of subTracks) {
@@ -358,9 +386,6 @@ export function playMedia(item: Item, host: HTMLElement, onClose: () => void): (
     save();
   });
   video.addEventListener('play', render);
-  video.addEventListener('playing', () => {
-    pending = null;
-  });
   video.addEventListener('pause', () => {
     render();
     ui.poke();

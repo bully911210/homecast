@@ -10,6 +10,7 @@ const MAX_PARALLEL = 2;
 let active = 0;
 const waiting: (() => void)[] = [];
 const inFlight = new Map<string, Promise<string | null>>();
+const failed = new Set<string>(); // files with no frame to grab (no cover art, corrupt): don't retry every browse
 
 async function slot<T>(fn: () => Promise<T>): Promise<T> {
   if (active >= MAX_PARALLEL) await new Promise<void>((r) => waiting.push(r));
@@ -39,6 +40,7 @@ export function thumbArgs(kind: string, input: string, output: string, duration:
 export function getThumb(ffmpeg: string, cacheDir: string, key: string, kind: string, input: string, duration: number): Promise<string | null> {
   const out = join(cacheDir, `${key}.jpg`);
   if (existsSync(out)) return Promise.resolve(out);
+  if (failed.has(out)) return Promise.resolve(null);
   const pending = inFlight.get(out);
   if (pending) return pending;
   const p = slot(async () => {
@@ -49,6 +51,7 @@ export function getThumb(ffmpeg: string, cacheDir: string, key: string, kind: st
     if ((r.code !== 0 || !existsSync(tmp)) && kind === 'video') r = await run(ffmpeg, thumbArgs(kind, input, tmp, 0.1), 60_000);
     if (r.code !== 0 || !existsSync(tmp)) {
       await rm(tmp, { force: true });
+      failed.add(out);
       return null;
     }
     await rename(tmp, out);

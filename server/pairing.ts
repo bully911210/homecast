@@ -70,13 +70,15 @@ export class Pairing {
     const cur = !mine || now - mine.start > WINDOW_MS ? { n: 0, start: now } : mine;
     cur.n++;
     this.#perIp.set(ip, cur);
-    this.#global.n++;
     if (this.#perIp.size > 1000) this.#perIp.clear(); // bound memory on a hostile LAN
+    // Requests already refused per IP don't count globally: one noisy host can't keep rotating the PIN.
+    if (cur.n > PER_IP) return true;
+    this.#global.n++;
     if (this.#global.n > GLOBAL) {
-      this.rotate(); // someone is guessing: the PIN they were guessing no longer exists
+      this.rotate(); // many hosts guessing: the PIN they were guessing no longer exists
       return true;
     }
-    return cur.n > PER_IP;
+    return false;
   }
 
   pair(ip: string, body: PairBody): PairResult {
