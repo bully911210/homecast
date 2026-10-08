@@ -2,7 +2,7 @@
 
 # HomeCast
 
-**Your PC's movies, music and photos on any TV browser. One exe. No server, no account, no cloud.**
+**Your PC's movies, music and photos on your TV's web browser. One exe. No server, no account, no cloud.**
 
 [![CI](https://github.com/bully911210/homecast/actions/workflows/ci.yml/badge.svg)](https://github.com/bully911210/homecast/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/bully911210/homecast?label=download)](https://github.com/bully911210/homecast/releases/latest)
