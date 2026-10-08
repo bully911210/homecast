@@ -10,7 +10,7 @@ let root: string;
 let outside: string;
 
 beforeAll(() => {
-  base = realpathSync(mkdtempSync(join(tmpdir(), 'homecast-jail-')));
+  base = realpathSync.native(mkdtempSync(join(tmpdir(), "homecast-jail-"))); // native = long names, like fs/promises realpath
   root = join(base, 'media');
   outside = join(base, 'media2'); // sibling with a shared prefix: classic startsWith bug
   mkdirSync(join(root, 'sub'), { recursive: true });
