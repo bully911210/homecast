@@ -10,7 +10,7 @@ One Node 24 process on a Windows PC serves chosen folders to TVs and phones on t
 - `home` provider: the Continue Watching row, built from playback state and resolved through the providers' `get()`. A folder Item with `meta.row` renders as a row on the home screen.
 - **Item API (4 routes):** `GET /api/items?parent=` · `GET /api/open/:id` (file, HLS via `?hls=&t=&a=`, subtitles via `?track=`) · `GET /api/thumb/:id` · `POST /api/state/:id`.
 - **Outside the item surface:** `POST /pair`, `GET /api/health`, `/admin` + `/admin/api/*` (loopback only). A new use case is one new provider file.
-- **Client:** one focusable grid plus one player per kind (media, image). Vanilla TS, esbuild `chrome69`, 9 KB gzipped initial. Remote and pointer share one focus model.
+- **Client:** one focusable grid plus one player per kind (media, image). Vanilla TS, esbuild `chrome69`, 12 KB gzipped initial. Remote and pointer share one focus model.
 
 ## Playback: exactly two paths
 At pairing (and every launch) the device reports `canPlayType`/MSE support for H.264, HEVC, VP9, AV1 and native HLS.

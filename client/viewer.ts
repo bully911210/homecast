@@ -2,6 +2,7 @@
 import type { Item } from '../shared/types.ts';
 import { openUrl } from './api.ts';
 import { h, idleHider } from './dom.ts';
+import { icon } from './icons.ts';
 import { focus, isBackKey, isEnterKey, keyDir, move } from './nav.ts';
 
 export function viewImage(start: Item, siblings: Item[], host: HTMLElement, onClose: (last: Item) => void): () => void {
@@ -9,9 +10,9 @@ export function viewImage(start: Item, siblings: Item[], host: HTMLElement, onCl
   let i = Math.max(0, photos.findIndex((p) => p.id === start.id));
   const img = h('img', { class: 'photo', alt: '' });
   const title = h('div', { class: 'otitle' });
-  const prev = h('button', { class: 'btn ctl', 'data-nav': true, type: 'button', 'aria-label': 'Previous', text: '⏮ Previous' });
-  const next = h('button', { class: 'btn ctl', 'data-nav': true, type: 'button', 'aria-label': 'Next', text: 'Next ⏭' });
-  const closeBtn = h('button', { class: 'btn ctl', 'data-nav': true, type: 'button', 'aria-label': 'Back', text: '← Back' });
+  const prev = h('button', { class: 'btn ctl', 'data-nav': true, type: 'button', 'aria-label': 'Previous' }, icon('prev'), ' Previous');
+  const next = h('button', { class: 'btn ctl', 'data-nav': true, type: 'button', 'aria-label': 'Next' }, 'Next ', icon('next'));
+  const closeBtn = h('button', { class: 'btn ctl', 'data-nav': true, type: 'button', 'aria-label': 'Back' }, icon('back'), ' Back');
   const overlay = h('div', { class: 'overlay' }, h('div', { class: 'otop' }, closeBtn, title), h('div', { class: 'obottom' }, h('div', { class: 'ctls' }, prev, next)));
   const layer = h('div', { class: 'player kind-image', 'data-layer': true }, img, overlay);
   host.appendChild(layer);

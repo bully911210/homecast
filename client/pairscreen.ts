@@ -1,15 +1,20 @@
 // First-run pairing: type the 6-digit PIN shown on the PC, with the remote's number keys or the keypad.
 import { detectCaps, pair } from './api.ts';
 import { clear, h } from './dom.ts';
+import { mark } from './icons.ts';
 import { focus } from './nav.ts';
 
 export function renderPair(root: HTMLElement, onPaired: () => void): void {
   clear(root);
   let pin = '';
-  const display = h('div', { class: 'pin', text: '______' });
+  const boxes = [0, 1, 2, 3, 4, 5].map(() => h('span'));
+  const display = h('div', { class: 'pin' }, ...boxes);
   const msg = h('p', { class: 'msg', text: '' });
   const update = (): void => {
-    display.textContent = (pin + '______').slice(0, 6);
+    boxes.forEach((b, i) => {
+      b.textContent = pin[i] ?? '';
+      b.className = i === pin.length ? 'next' : '';
+    });
   };
   const submit = async (): Promise<void> => {
     if (pin.length !== 6) return;
@@ -51,8 +56,9 @@ export function renderPair(root: HTMLElement, onPaired: () => void): void {
     h(
       'div',
       { class: 'pair' },
-      h('h1', { text: 'HomeCast' }),
-      h('p', { text: 'Enter the PIN shown on your PC (HomeCast admin page).' }),
+      mark('mark'),
+      h('h1', {}, 'Home', h('b', { text: 'Cast' })),
+      h('p', { text: 'Enter the 6-digit PIN shown on the HomeCast admin page on your PC.' }),
       display,
       pad,
       msg,

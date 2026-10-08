@@ -3,6 +3,7 @@
 import type { Item } from '../shared/types.ts';
 import { openUrl, saveState } from './api.ts';
 import { clear, fmtTime, h, idleHider } from './dom.ts';
+import { icon } from './icons.ts';
 import { focus, isBackKey, isEnterKey, keyDir, move } from './nav.ts';
 
 interface HlsLike {
@@ -89,8 +90,8 @@ export function parseVtt(text: string): Cue[] {
   return cues;
 }
 
-const btn = (label: string, aria: string): HTMLButtonElement =>
-  h('button', { class: 'btn ctl', 'data-nav': true, type: 'button', 'aria-label': aria, text: label });
+const btn = (aria: string, ...content: (Node | string)[]): HTMLButtonElement =>
+  h('button', { class: 'btn ctl', 'data-nav': true, type: 'button', 'aria-label': aria }, ...content);
 
 export function playMedia(item: Item, host: HTMLElement, onClose: () => void): () => void {
   const meta = item.meta ?? {};
@@ -105,11 +106,11 @@ export function playMedia(item: Item, host: HTMLElement, onClose: () => void): (
   const fill = h('i');
   const progress = h('div', { class: 'progress', 'data-nav': true, tabindex: 0, role: 'slider', 'aria-label': 'Seek' }, h('div', { class: 'track' }, fill));
   const clock = h('div', { class: 'clock', text: '0:00' });
-  const closeBtn = btn('← Back', 'Back');
-  const back10 = btn('⏮ -10s', 'Back 10 seconds');
-  const playBtn = btn('⏯', 'Play or pause');
-  const fwd10 = btn('+10s ⏭', 'Forward 10 seconds');
-  const tracksBtn = btn('💬 Audio & subtitles', 'Audio and subtitles');
+  const closeBtn = btn('Back', icon('back'), ' Back');
+  const back10 = btn('Back 10 seconds', icon('prev'), ' 10s');
+  const playBtn = btn('Play or pause', icon('pause'));
+  const fwd10 = btn('Forward 10 seconds', '10s ', icon('next'));
+  const tracksBtn = btn('Audio and subtitles', icon('subtitles'), ' Audio & subtitles');
   const status = h('div', { class: 'status' });
   const overlay = h(
     'div',
@@ -119,7 +120,7 @@ export function playMedia(item: Item, host: HTMLElement, onClose: () => void): (
   );
   const menu = h('div', { class: 'menu', 'data-layer': true, hidden: true });
   const layer = h('div', { class: `player kind-${item.kind}`, 'data-layer': true }, video, status, overlay, menu);
-  if (item.kind === 'audio') layer.insertBefore(h('div', { class: 'audio-art', text: `🎵 ${item.title}` }), status);
+  if (item.kind === 'audio') layer.insertBefore(h('div', { class: 'audio-art' }, icon('audio'), item.title), status);
   host.appendChild(layer);
 
   let offset = 0; // seconds into the file where the current stream starts (HLS restarts)
@@ -254,7 +255,12 @@ export function playMedia(item: Item, host: HTMLElement, onClose: () => void): (
     const t = total();
     fill.style.width = t > 0 ? `${Math.min(100, (now() / t) * 100)}%` : '0%';
     clock.textContent = `${fmtTime(now())} / ${fmtTime(t)}`;
-    playBtn.textContent = video.paused ? '▶' : '⏸';
+    const want = video.paused ? 'play' : 'pause';
+    if (playBtn.getAttribute('data-icon') !== want) {
+      clear(playBtn);
+      playBtn.appendChild(icon(want));
+      playBtn.setAttribute('data-icon', want);
+    }
     layer.setAttribute('data-time', now().toFixed(1)); // read by the e2e tests
   }
 

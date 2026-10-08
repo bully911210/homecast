@@ -1,7 +1,7 @@
 // The whole TV flow twice: once with the remote (keyboard only), once with a pointer (mouse only).
 import { expect, test, type Page } from '@playwright/test';
 
-const MOVIE = 'Long Feature (2015)'; // 90 s HEVC: forces the HLS path and gives room to seek
+const MOVIE = 'Long Feature'; // 90 s HEVC forces the HLS path; tiles show the year in the subtitle
 
 async function currentPin(page: Page): Promise<string> {
   const res = await page.request.get('/admin/api/status');
@@ -58,11 +58,12 @@ test('remote only: pair, browse, play, seek, back, resume', async ({ page }) => 
   await page.locator('.screen[data-ready]').waitFor();
   expect((await focusedTitle(page)).trim()).toBe(MOVIE); // focus returns to the tile we left
 
-  for (const crumbs of ['HomeCast › .fixtures', 'HomeCast']) {
-    await page.keyboard.press('Escape');
-    await expect(page.locator('.crumbs')).toHaveText(crumbs);
-    await page.locator('.screen[data-ready]').waitFor();
-  }
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.crumbs')).toHaveText('.fixtures');
+  await page.locator('.screen[data-ready]').waitFor();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.topbar .brand')).toBeVisible(); // home
+  await page.locator('.screen[data-ready]').waitFor();
   await expect(page.locator('h2').first()).toHaveText('Continue Watching');
   await page.locator('.screen[data-ready]').waitFor();
   // Focus comes back on the folder we left; climb to the first row and its first tile.
@@ -93,10 +94,10 @@ test('mouse only: hover, click a tile, click-to-seek, click Back', async ({ page
   await expect.poll(() => playerTime(page), { timeout: 30_000 }).toBeGreaterThan(50);
 
   await page.mouse.move(500, 500);
-  await page.locator('.player .btn', { hasText: '← Back' }).click();
+  await page.locator('.player .btn', { hasText: /^\s*Back$/ }).click();
   await expect(page.locator('.player')).toHaveCount(0);
   await page.locator('.topbar .back').click();
-  await expect(page.locator('.crumbs')).toHaveText('HomeCast › .fixtures');
+  await expect(page.locator('.crumbs')).toHaveText('.fixtures');
 });
 
 test('cursor hides after 3 s idle and returns on move', async ({ page }) => {

@@ -4,14 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HomeCast Admin</title>
-<link rel="icon" href="data:,">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='15' fill='%23FFA22B'/%3E%3Cpath d='M13 31.5 32 15l19 16.5V47a4 4 0 0 1-4 4H17a4 4 0 0 1-4-4z' fill='%230E1116'/%3E%3Cpath d='M28.5 28.5 40 36l-11.5 7.5z' fill='%23FFC83D'/%3E%3C/svg%3E">
 <style>
 :root { --bg: #f6f7f9; --card: #fff; --text: #14171c; --muted: #5f6877; --line: #e2e5ea; --accent: #b37a00; --ok: #1a7f37; --warn: #9a3412; --warnbg: #fff4e5; }
 @media (prefers-color-scheme: dark) { :root { --bg: #0e1116; --card: #171b22; --text: #eef1f5; --muted: #9aa3b2; --line: #262c36; --accent: #ffcc33; --ok: #4ade80; --warn: #fdba74; --warnbg: #2b1d0e; } }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 main { max-width: 980px; margin: 0 auto; padding: 24px 16px 64px; }
-h1 { font-size: 28px; margin: 8px 0 20px; }
+h1 { font-size: 30px; margin: 8px 0 20px; display: flex; align-items: center; gap: 12px; letter-spacing: -0.5px; }
+h1 svg { width: 44px; height: 44px; }
+h1 b { color: #ff9a1f; }
 h2 { font-size: 18px; margin: 0 0 12px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
 .pairing { display: grid; grid-template-columns: 220px 1fr; gap: 24px; align-items: center; }
@@ -38,7 +40,7 @@ dd { margin: 0; }
 </head>
 <body>
 <main>
-  <h1>HomeCast</h1>
+  <h1><svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="hcg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFC83D"/><stop offset="1" stop-color="#FF7A1A"/></linearGradient></defs><rect width="64" height="64" rx="15" fill="url(#hcg)"/><path d="M13 31.5 32 15l19 16.5V47a4 4 0 0 1-4 4H17a4 4 0 0 1-4-4z" fill="#0E1116"/><path d="M28.5 28.5 40 36l-11.5 7.5z" fill="#FFC83D"/></svg><span>Home<b>Cast</b></span></h1>
   <div id="error" class="warn"></div>
 
   <section class="card">

@@ -8,3 +8,4 @@ playwright-report/
 *.tmp.mjs
 .demo/
 launch/
+.demo-src/

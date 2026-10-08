@@ -12,7 +12,7 @@ import { buildHlsArgs, canDirectPlay, type Encoder } from '../../playback.ts';
 import type { Database } from '../../store.ts';
 import { serveFile } from '../../stream.ts';
 import { embeddedToVtt, sidecarToVtt, TEXT_SUB_CODECS } from '../../subs.ts';
-import { getThumb } from '../../thumbs.ts';
+import { getThumb, THUMB_WIDTHS, type ThumbSize } from '../../thumbs.ts';
 import * as repo from './repo.ts';
 import type { FsRow, Sidecar } from './repo.ts';
 import type { Scanner } from './scan.ts';
@@ -145,7 +145,9 @@ export function createFsProvider(d: FsDeps): ProviderWithGet {
     if (row.kind === 'folder' || !d.ffmpeg) throw notFound('no thumbnail');
     const path = await locate(row);
     const duration = parseProbe(row)?.duration ?? 0;
-    const out = await getThumb(d.ffmpeg, join(d.cacheDir, 'thumbs'), `${row.id}-${Math.floor(row.mtime_ms)}`, row.kind, path, duration);
+    const size: ThumbSize = ctx.query.get('size') === 'l' ? 'l' : 's';
+    const key = `${row.id}-${Math.floor(row.mtime_ms)}${size === 'l' ? '-l' : ''}`;
+    const out = await getThumb(d.ffmpeg, join(d.cacheDir, 'thumbs'), key, row.kind, path, duration, THUMB_WIDTHS[size]);
     if (!out) throw notFound('no thumbnail');
     return serveFile(ctx.req, out, { contentType: 'image/jpeg', cacheControl: 'private, max-age=604800' });
   }

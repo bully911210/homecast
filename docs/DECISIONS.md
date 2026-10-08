@@ -58,6 +58,7 @@ Every dependency and every non-obvious choice, one line each. The rule: platform
 - Left/right never leave the current row; up/down may drift to the nearest element above or below.
 - Back is one path: the remote key, the on-screen ← Back button and browser back all go through `history.back()` → `popstate`.
 - Tiles render in chunks of 60 with an IntersectionObserver sentinel, and thumbnails load lazily. That's enough "virtualisation" for TV CPUs without a windowing library.
+- The brand (docs/brand) is two SVGs; the TV app draws the mark and its icons with createElementNS, so there are no image requests and no icon font. The client is 12 KB gzipped.
 - Pixel sizes are rem-based with `html { font-size: 0.8333vw }`, so the 1920×1080 layout scales to 720p and 4K TVs.
 
 ## Packaging

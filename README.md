@@ -1,18 +1,19 @@
 <div align="center">
 
-# HomeCast
+<img src="docs/brand/logo.svg" alt="HomeCast" width="300">
 
 **Your PC's movies, music and photos on your TV's web browser. One exe. No server, no account, no cloud.**
 
 [![CI](https://github.com/bully911210/homecast/actions/workflows/ci.yml/badge.svg)](https://github.com/bully911210/homecast/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/bully911210/homecast?label=download)](https://github.com/bully911210/homecast/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![TV client](https://img.shields.io/badge/TV%20client-9.3%20KB-brightgreen)
+![TV client](https://img.shields.io/badge/TV%20client-12%20KB-brightgreen)
 ![Runtime deps](https://img.shields.io/badge/runtime%20deps-6-brightgreen)
 
-<img src="docs/media/demo.gif" alt="Browsing and playing with arrow keys only: home screen, folders, a 4K HEVC file converted on the fly, seek, back" width="720">
+<img src="docs/media/demo.gif" alt="Remote-only: home screen, Continue Watching, the library, Sintel converted on the fly, seek, audio and subtitle menu, back" width="720">
 
-<sub>Remote-only navigation at 1920x1080. The demo library is generated with ffmpeg, so every frame here is reproducible.</sub>
+<sub><a href="docs/media/demo.mp4">▶ Watch the full demo (30 fps, with seeking and the audio and subtitle menu)</a></sub><br>
+<sub>Remote-only navigation at 1920x1080, recorded from the real app by <code>tools/demo.ts</code>. Demo films: Sintel, Big Buck Bunny, Tears of Steel, Elephants Dream and Caminandes © Blender Foundation, <a href="https://www.blender.org/about/projects/">CC-BY</a>.</sub>
 
 ### [⬇ Download for Windows](https://github.com/bully911210/homecast/releases/latest/download/HomeCast-win-x64.zip)
 
@@ -59,7 +60,7 @@ The exe isn't code-signed yet, so SmartScreen asks once ("More info", then "Run 
 
 ```mermaid
 flowchart LR
-  TV["TV browser<br/>9.3 KB client"] -- "4 routes" --> R["Router<br/>(Hono)"]
+  TV["TV browser<br/>12 KB client"] -- "4 routes" --> R["Router<br/>(Hono)"]
   R --> P["Providers<br/>fs · home · yours next"]
   P -- "TV can decode it" --> D["Direct stream<br/>Range, 206, ETag"]
   P -- "TV can't" --> H["One ffmpeg builder<br/>copy what plays, convert the rest"]
