@@ -36,10 +36,13 @@ export async function resolveInJail(rootReal: string, rel: string): Promise<stri
   const candidate = rel === '' ? rootReal : join(rootReal, ...rel.split('/'));
   if (!within(rootReal, candidate)) return null;
   let real: string;
+  let root: string;
   try {
     real = await realpath(candidate);
+    // Resolve the root the same way: Windows 8.3 short names (C:\Users\RUNNER~1) expand to long ones.
+    root = await realpath(rootReal);
   } catch {
     return null;
   }
-  return within(rootReal, real) ? real : null;
+  return within(root, real) ? real : null;
 }
