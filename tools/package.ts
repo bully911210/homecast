@@ -67,6 +67,7 @@ export async function packageApp(): Promise<string> {
   copyFileSync(join(ROOT, 'tools', 'tray.ps1'), join(APP, 'tray.ps1'));
   copyFileSync(join(ROOT, 'LICENSE'), join(APP, 'LICENSE.txt'));
   copyFileSync(join(ROOT, 'docs', 'FIRST-RUN.txt'), join(APP, 'README-FIRST.txt'));
+  copyFileSync(join(ROOT, 'THIRD-PARTY.md'), join(APP, 'THIRD-PARTY.txt'));
 
   // 5. Zip with the built-in PowerShell archiver.
   rmSync(ZIP, { force: true });

@@ -1,0 +1,34 @@
+name: TV report
+description: Tell us how HomeCast works on your TV, good or bad
+title: "TV report: <brand and model>"
+labels: [tv-report]
+body:
+  - type: input
+    id: model
+    attributes:
+      label: TV brand and model
+      placeholder: Samsung UE55TU7100, LG OLED55C1, Sony Bravia with Android TV...
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser on the TV
+      placeholder: Built-in Samsung Internet, LG web browser, Chrome on Android TV...
+  - type: checkboxes
+    id: works
+    attributes:
+      label: What worked
+      options:
+        - label: Pairing with the PIN
+        - label: Moving around with the arrow keys
+        - label: Back button on the remote
+        - label: MP4 files play
+        - label: MKV or other converted files play
+        - label: Seeking
+        - label: Subtitles
+  - type: textarea
+    id: notes
+    attributes:
+      label: What happened
+      description: Anything that didn't work, and the file type if playback failed.

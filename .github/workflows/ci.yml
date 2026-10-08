@@ -57,4 +57,18 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/HomeCast-win-x64.zip --title "HomeCast $GITHUB_REF_NAME" --generate-notes || gh release upload "$GITHUB_REF_NAME" dist/HomeCast-win-x64.zip --clobber
+        run: |
+          SHA=$(sha256sum dist/HomeCast-win-x64.zip | cut -d' ' -f1)
+          {
+            echo "## Download"
+            echo
+            echo "**[HomeCast-win-x64.zip](https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/HomeCast-win-x64.zip)**: unzip, run \`homecast.exe\`, follow \`README-FIRST.txt\`."
+            echo
+            echo "SHA-256: \`$SHA\`"
+            echo
+            echo "The exe is not code-signed yet, so SmartScreen asks once (More info, then Run anyway). Check the hash above if you want to be sure the file is the one CI built from this tag."
+            echo
+            echo "Bundled ffmpeg and ffprobe are GPL; see THIRD-PARTY.txt in the zip for licences and source links."
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" dist/HomeCast-win-x64.zip --title "HomeCast $GITHUB_REF_NAME" --notes-file notes.md --generate-notes \
+            || gh release upload "$GITHUB_REF_NAME" dist/HomeCast-win-x64.zip --clobber

@@ -6,3 +6,4 @@ playwright-report/
 .fixtures/
 *.log
 *.tmp.mjs
+.demo/
