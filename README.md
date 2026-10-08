@@ -17,6 +17,8 @@
 
 ### [⬇ Download for Windows](https://github.com/bully911210/homecast/releases/latest/download/HomeCast-win-x64.zip)
 
+<sub>[What's new in the latest release](https://github.com/bully911210/homecast/releases/latest)</sub>
+
 </div>
 
 ## Three steps
@@ -36,9 +38,11 @@ That's it. Browse with the remote, a pointer remote or a mouse.
 | <img src="docs/media/pair.png" alt="Pairing screen with on-screen keypad"> | <img src="docs/media/admin.png" alt="Admin page with QR code, PIN, folders, devices and health checks"> |
 | **Pair once with a PIN.** No accounts, no passwords, devices you can revoke | **One admin page** on the PC: folders, devices, health warnings, start with Windows |
 
-- **Direct play** for MP4 and WebM the TV can decode, with full seeking.
-- **Smart conversion** for everything else (MKV, HEVC, AV1, DTS, AC3...). Video and audio are decided separately, so an MKV with DTS only has its audio converted. NVENC, Quick Sync or AMF when available, otherwise libx264.
+- **Plays almost anything.** For each play the PC picks the cheapest path that works on that TV: direct play, remux, audio-only conversion, GPU transcode (NVENC, Quick Sync or AMF) or CPU transcode. If the TV still can't decode it, playback steps to the next plan automatically, a fixed number of times, never in a loop.
+- **Direct play** for MP4 and WebM the TV can decode, with full seeking. An MKV with DTS audio only has its audio converted.
 - **Subtitles:** sidecar `.srt`/`.vtt` and embedded text tracks. **Audio track** switching.
+- **A tidy library from messy file names.** Year, resolution, HDR and codec come from release names; episodes (`S01E02`, `1x02`, double episodes) are recognised. A file renamed or moved within a shared folder keeps its watch history, and files still being copied in are added once they finish.
+- **Progress you can trust.** Saved every 10 seconds and when you leave the player; a late save can't drag it backwards; finished titles offer **Play again**.
 - **Photos** full screen with next and previous. **Music** with the same player.
 - **Remote, pointer or mouse:** arrow keys, OK, Back (Samsung and LG keys mapped), hover to focus, click to play, click the bar to seek.
 - **Tray light:** green while HomeCast answers, red when it doesn't.
@@ -62,8 +66,9 @@ The exe isn't code-signed yet, so SmartScreen asks once ("More info", then "Run 
 flowchart LR
   TV["TV browser<br/>12.7 KB client"] -- "4 routes" --> R["Router<br/>(Hono)"]
   R --> P["Providers<br/>fs · home · yours next"]
-  P -- "TV can decode it" --> D["Direct stream<br/>Range, 206, ETag"]
-  P -- "TV can't" --> H["One ffmpeg builder<br/>copy what plays, convert the rest"]
+  P --> PL["Playback planner<br/>per TV, per file"]
+  PL -- "direct" --> D["Direct stream<br/>Range, 206, ETag"]
+  PL -- "remux · convert · transcode" --> H["One ffmpeg builder<br/>copy what plays, convert the rest"]
   H --> J["Job manager<br/>2 jobs, idle kill, 10 GB cache"]
 ```
 
@@ -104,7 +109,7 @@ Node 24+, Windows or Linux. Google Chrome is needed for the browser tests (Chrom
 ```bash
 npm ci
 npm run dev        # builds the TV client and starts on :8096
-npm test           # 207 unit and integration tests, generates test media with ffmpeg
+npm test           # 250 unit and integration tests, generates test media with ffmpeg
 npm run e2e        # Playwright: the whole flow with the remote only, then the mouse only
 npm run package    # Windows: dist/HomeCast-win-x64.zip
 ```
