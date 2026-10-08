@@ -11,7 +11,7 @@ import { run } from '../server/run.ts';
 import { wire } from '../server/wire.ts';
 import { buildClient } from './build-client.ts';
 
-const DEMO = resolve('.demo');
+const DEMO = resolve('.demo', 'Media');
 const MEDIA = resolve('docs', 'media');
 const PORT = 8099;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -72,13 +72,14 @@ async function capture(): Promise<void> {
     // Chrome's own screencast: a JPEG per visual change, with timestamps. No extra ffmpeg download.
     const cdp = await ctx.newCDPSession(page);
     const frames: { file: string; t: number }[] = [];
+    const pending: { file: string; data: string }[] = [];
     cdp.on('Page.screencastFrame', (f: { data: string; sessionId: number; metadata: { timestamp?: number } }) => {
-      const file = join(videoDir, `f${String(frames.length).padStart(5, '0')}.jpg`);
-      writeFileSync(file, Buffer.from(f.data, 'base64'));
-      frames.push({ file, t: f.metadata.timestamp ?? Date.now() / 1000 });
+      // Ack first: Chrome sends the next frame only after the ack, so disk writes must not sit in between.
       void cdp.send('Page.screencastFrameAck', { sessionId: f.sessionId }).catch(() => undefined);
+      const file = join(videoDir, `f${String(frames.length).padStart(5, '0')}.jpg`);
+      frames.push({ file, t: f.metadata.timestamp ?? Date.now() / 1000 });
+      pending.push({ file, data: f.data });
     });
-    await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 85, maxWidth: 1920, maxHeight: 1080, everyNthFrame: 1 });
     const pin = ((await (await page.request.get(`${BASE}/admin/api/status`)).json()) as { pin: string }).pin;
     await page.goto(BASE);
     await page.locator('.pin').waitFor();
@@ -98,11 +99,16 @@ async function capture(): Promise<void> {
         fetch('/api/state/' + id, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ position, duration }) });
       await post(movies.find((m) => m.title.startsWith('Mandelbrot'))!.id, 8, 60);
       await post(movies.find((m) => m.title.startsWith('Northern'))!.id, 35, 90);
+      await post(movies.find((m) => m.title.startsWith('Game of Life'))!.id, 48, 90);
     });
     await page.reload();
     await ready(page);
     await pause(1500); // thumbnails fade in
     await page.screenshot({ path: join(MEDIA, 'home.png') });
+    // Record only from here: the home screen is fully drawn, so the video never opens on a blank page.
+    // 1280 wide keeps Chrome's screencast near its full frame rate; the GIF is 800 wide anyway.
+    await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 80, maxWidth: 1280, maxHeight: 720, everyNthFrame: 1 });
+    await pause(800);
     for (const k of ['ArrowRight', 'ArrowDown', 'ArrowRight', 'ArrowRight', 'ArrowDown']) {
       await page.keyboard.press(k);
       await pause(450);
@@ -138,6 +144,7 @@ async function capture(): Promise<void> {
     await ready(page);
     await pause(1200);
     await cdp.send('Page.stopScreencast');
+    for (const p of pending) writeFileSync(p.file, Buffer.from(p.data, 'base64'));
     // concat list: each frame shown until the next one arrived
     const lines: string[] = [];
     frames.forEach((f, i) => {
@@ -146,6 +153,13 @@ async function capture(): Promise<void> {
     });
     lines.push(`file '${frames.at(-1)!.file.replace(/\\/g, '/')}'`);
     writeFileSync(join(videoDir, 'frames.txt'), lines.join('\n'));
+    const span = frames.at(-1)!.t - frames[0]!.t;
+    const gaps = frames.slice(1).map((f, i) => f.t - frames[i]!.t).sort((a, b) => a - b);
+    const ms = (s: number): string => (s * 1000).toFixed(0);
+    process.stdout.write(
+      `captured ${frames.length} frames over ${span.toFixed(1)} s (${(frames.length / span).toFixed(1)} fps), ` +
+        `median gap ${ms(gaps[gaps.length >> 1]!)} ms, 90th ${ms(gaps[Math.floor(gaps.length * 0.9)]!)} ms, longest ${ms(gaps.at(-1)!)} ms\n`,
+    );
     await ctx.close();
 
     const admin = await browser.newPage({ viewport: { width: 1280, height: 900 } });
@@ -158,7 +172,7 @@ async function capture(): Promise<void> {
     const { ffmpeg } = findBins();
     const r = await run(
       ffmpeg!,
-      ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', join(videoDir, 'frames.txt'), '-vf', 'fps=24,format=yuv420p', '-c:v', 'libx264', '-crf', '20', join(MEDIA, 'demo.webm.mp4')],
+      ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', join(videoDir, 'frames.txt'), '-vf', 'fps=30,format=yuv420p', '-c:v', 'libx264', '-crf', '20', join(MEDIA, 'demo.webm.mp4')],
       300_000,
     );
     if (r.code !== 0) throw new Error(`stitching frames failed: ${r.stderr}`);
@@ -171,16 +185,16 @@ async function capture(): Promise<void> {
   }
 }
 
-/** Hero GIF: 800px wide, 10 fps, 2-pass palette, pairing screen trimmed off the front. */
+/** Hero GIF: 720px wide, 20 fps, 2-pass palette. */
 async function makeGif(): Promise<void> {
   const { ffmpeg } = findBins();
   const src = join(MEDIA, 'demo.webm.mp4');
-  const filters = 'fps=10,scale=800:-1:flags=lanczos';
+  const filters = 'fps=20,scale=720:-1:flags=lanczos';
   const pal = join(MEDIA, 'palette.png');
-  await run(ffmpeg!, ['-hide_banner', '-loglevel', 'error', '-y', '-ss', '2', '-i', src, '-vf', `${filters},palettegen=max_colors=128:stats_mode=diff`, pal], 300_000);
+  await run(ffmpeg!, ['-hide_banner', '-loglevel', 'error', '-y', '-i', src, '-vf', `${filters},palettegen=max_colors=256:stats_mode=diff`, pal], 300_000);
   const r = await run(
     ffmpeg!,
-    ['-hide_banner', '-loglevel', 'error', '-y', '-ss', '2', '-i', src, '-i', pal, '-lavfi', `${filters}[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`, join(MEDIA, 'demo.gif')],
+    ['-hide_banner', '-loglevel', 'error', '-y', '-i', src, '-i', pal, '-lavfi', `${filters}[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle`, join(MEDIA, 'demo.gif')],
     300_000,
   );
   if (r.code !== 0) throw new Error(r.stderr);

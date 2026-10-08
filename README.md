@@ -10,7 +10,7 @@
 ![TV client](https://img.shields.io/badge/TV%20client-9.3%20KB-brightgreen)
 ![Runtime deps](https://img.shields.io/badge/runtime%20deps-6-brightgreen)
 
-<img src="docs/media/demo.gif" alt="Browsing and playing with arrow keys only: home screen, folders, a 4K HEVC file converted on the fly, seek, back" width="860">
+<img src="docs/media/demo.gif" alt="Browsing and playing with arrow keys only: home screen, folders, a 4K HEVC file converted on the fly, seek, back" width="720">
 
 <sub>Remote-only navigation at 1920x1080. The demo library is generated with ffmpeg, so every frame here is reproducible.</sub>
 
