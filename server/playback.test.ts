@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { NO_CAPS, type Caps } from '../shared/types.ts';
 import type { Probe } from './media.ts';
-import { buildHlsArgs, canDirectPlay, probeEncoderArgs, type HlsPlan } from './playback.ts';
+import { buildHlsArgs, canDirectPlay, planPlayback, probeEncoderArgs, type Encoder, type HlsPlan } from './playback.ts';
 
 const MP4 = 'mov,mp4,m4a,3gp,3g2,mj2';
 const MKV = 'matroska,webm';
@@ -43,6 +43,36 @@ describe('canDirectPlay (path 1)', () => {
     expect(canDirectPlay(p, TV, 'mp4', 1)).toBe(true);
     expect(canDirectPlay(p, TV, 'mp4', 2)).toBe(false);
   });
+
+  describe('planPlayback', () => {
+    const server = { ffmpeg: true, ffprobe: true, hls: true, encoders: ['h264_nvenc', 'libx264'] as const };
+
+    it('orders direct, stream copy, hardware encode, then CPU encode without I/O', () => {
+      const p = probe(MP4, 'h264', 'aac');
+      expect(planPlayback(p, TV, 'mp4', server)).toEqual({ mode: 'direct' });
+      expect(planPlayback(p, TV, 'mp4', server, { attempt: 1 })).toMatchObject({ mode: 'remux' });
+      expect(planPlayback(p, TV, 'mp4', server, { attempt: 1, forceHls: true })).toMatchObject({ mode: 'remux' });
+      expect(planPlayback(p, TV, 'mp4', server, { forceHls: true })).toMatchObject({ mode: 'remux' });
+      expect(planPlayback(p, TV, 'mp4', server, { attempt: 2 })).toMatchObject({ mode: 'transcode', encoder: 'h264_nvenc', hardware: true });
+      expect(planPlayback(p, TV, 'mp4', server, { attempt: 3 })).toMatchObject({ mode: 'transcode', encoder: 'libx264', hardware: false });
+    });
+
+    it('prefers copied video with audio-only conversion before video encoding', () => {
+      const p = probe(MKV, 'h264', 'dts');
+      expect(planPlayback(p, TV, 'mkv', server)).toMatchObject({ mode: 'hls', video: 'copy', audio: 'encode' });
+      expect(planPlayback(p, TV, 'mkv', server, { attempt: 1 })).toMatchObject({ mode: 'transcode', encoder: 'h264_nvenc' });
+    });
+
+    it('uses only CPU encoding in safe mode and reports when no conversion path exists', () => {
+      const p = probe(MKV, 'hevc', 'dts');
+      expect(planPlayback(p, TV, 'mkv', server, { safe: true })).toMatchObject({ mode: 'transcode', encoder: 'libx264', hardware: false, audio: 'encode' });
+      expect(planPlayback(p, TV, 'mkv', { ...server, ffmpeg: false, hls: false })).toEqual({ mode: 'unplayable', reason: 'TRANSCODER_UNAVAILABLE' });
+    });
+
+    it('keeps direct playback available without ffmpeg', () => {
+      expect(planPlayback(probe(MP4, 'h264', 'aac'), TV, 'mp4', { ffmpeg: false, ffprobe: true, hls: false, encoders: [] })).toEqual({ mode: 'direct' });
+    });
+  });
 });
 
 const opts = { input: 'in.mkv', outDir: 'out', start: 0, encoder: 'libx264' as const };
@@ -71,6 +101,44 @@ describe('buildHlsArgs (path 2): each stream decides independently', () => {
     expect(flag(plan.args, '-c:a')).toBe(plan.audio === 'copy' ? 'copy' : plan.audio === 'encode' ? 'aac' : undefined);
     expect(plan.args.at(-1)).toBe('out/index.m3u8');
     expect(flag(plan.args, '-f')).toBe('hls');
+  });
+
+  describe('planner capability matrix', () => {
+    it('is deterministic and only selects verified hardware encoders across representative media', () => {
+      const caps: Caps[] = [];
+      for (let bits = 0; bits < 16; bits++) {
+        caps.push({ h264: true, hevc: !!(bits & 1), vp9: !!(bits & 2), av1: !!(bits & 4), hls: !!(bits & 8) });
+      }
+      const audioCodecs = ['aac', 'ac3', 'dts', 'opus', null] as const;
+      const encoderSets: readonly (readonly Encoder[])[] = [[], ['libx264'], ['h264_nvenc', 'libx264'], ['h264_qsv', 'libx264'], ['h264_amf', 'libx264']];
+      const videos = ['h264', 'hevc', 'vp9', 'av1', 'mpeg4'];
+
+      for (const container of [MP4, MKV]) {
+        for (const codec of videos) {
+          for (const pixFmt of ['yuv420p', 'yuv420p10le']) {
+            for (const audio of audioCodecs) {
+              const p = probe(container, codec, audio, pixFmt);
+              for (const device of caps) {
+                for (const encoders of encoderSets) {
+                  const server = { ffmpeg: true, ffprobe: true, hls: true, encoders };
+                  const first = planPlayback(p, device, container === MP4 ? 'mp4' : 'mkv', server);
+                  expect(planPlayback(p, device, container === MP4 ? 'mp4' : 'mkv', server)).toEqual(first);
+                  if (first.mode === 'direct') expect(canDirectPlay(p, device, container === MP4 ? 'mp4' : 'mkv')).toBe(true);
+                  if (first.mode === 'transcode' && first.hardware) expect(encoders).toContain(first.encoder);
+
+                  if (encoders.includes('libx264')) {
+                    const plans = Array.from({ length: 8 }, (_, attempt) =>
+                      planPlayback(p, device, container === MP4 ? 'mp4' : 'mkv', server, { attempt }),
+                    );
+                    expect(plans.some((plan) => plan.mode === 'transcode' && plan.encoder === 'libx264')).toBe(true);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
   });
 
   it('seeking restarts with -ss before -i', () => {

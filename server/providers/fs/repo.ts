@@ -20,6 +20,7 @@ export interface FsRow {
   mtime_ms: number;
   probe: string | null;
   broken: number;
+  probe_attempts: number;
   added_at: number;
   sidecars: string | null;
 }
@@ -47,13 +48,13 @@ export function getByRel(db: Database, rootId: string, rel: string): FsRow | und
 }
 
 export function children(db: Database, parentId: string): FsRow[] {
-  return db.prepare('SELECT * FROM fs_items WHERE parent_id = ?').all(parentId) as unknown as FsRow[];
+  return db.prepare(`SELECT * FROM fs_items WHERE parent_id = ? ORDER BY CASE WHEN kind = 'folder' THEN 0 ELSE 1 END, title COLLATE NOCASE, id`).all(parentId) as unknown as FsRow[];
 }
 
 export function rootRows(db: Database, rootIds: readonly string[]): FsRow[] {
   if (rootIds.length === 0) return [];
   return db
-    .prepare(`SELECT * FROM fs_items WHERE rel = '' AND root_id IN (${rootIds.map(() => '?').join(',')})`)
+    .prepare(`SELECT * FROM fs_items WHERE rel = '' AND root_id IN (${rootIds.map(() => '?').join(',')}) ORDER BY title COLLATE NOCASE, id`)
     .all(...rootIds) as unknown as FsRow[];
 }
 
@@ -64,7 +65,7 @@ export function byIds(db: Database, ids: readonly string[]): FsRow[] {
 
 export function recentlyAdded(db: Database, limit: number): FsRow[] {
   return db
-    .prepare(`SELECT * FROM fs_items WHERE kind = 'video' AND broken = 0 ORDER BY added_at DESC, title LIMIT ?`)
+    .prepare(`SELECT * FROM fs_items WHERE kind = 'video' AND broken = 0 ORDER BY added_at DESC, title COLLATE NOCASE, id LIMIT ?`)
     .all(limit) as unknown as FsRow[];
 }
 
@@ -87,10 +88,35 @@ export function upsert(db: Database, rootId: string, scanId: number, e: Entry): 
   const changed = cur.size !== e.size || cur.mtime_ms !== e.mtimeMs || cur.kind !== e.kind;
   db.prepare(
     `UPDATE fs_items SET parent_id = ?, kind = ?, title = ?, size = ?, mtime_ms = ?, sidecars = ?, scan_id = ?,
-       probe = CASE WHEN ? THEN NULL ELSE probe END, broken = CASE WHEN ? THEN 0 ELSE broken END
+       probe = CASE WHEN ? THEN NULL ELSE probe END, broken = CASE WHEN ? THEN 0 ELSE broken END,
+       probe_attempts = CASE WHEN ? THEN 0 ELSE probe_attempts END
      WHERE id = ?`,
-  ).run(e.parentId, e.kind, e.title, e.size, e.mtimeMs, sidecars, scanId, changed ? 1 : 0, changed ? 1 : 0, cur.id);
-  return { id: cur.id, needsProbe: probeable && (changed || (cur.probe === null && cur.broken === 0)) };
+  ).run(e.parentId, e.kind, e.title, e.size, e.mtimeMs, sidecars, scanId, changed ? 1 : 0, changed ? 1 : 0, changed ? 1 : 0, cur.id);
+  return { id: cur.id, needsProbe: probeable && (changed || (cur.probe === null && (cur.broken === 0 || cur.probe_attempts < 3))) };
+}
+
+/** Reattach unique same-root file moves to their old IDs so playback state survives. */
+export function reuseMovedIds(db: Database, rootId: string, scanId: number): Map<string, { id: string; needsProbe: boolean }> {
+  const stale = db.prepare(`SELECT * FROM fs_items WHERE root_id = ? AND scan_id != ? AND kind != 'folder'`).all(rootId, scanId) as unknown as FsRow[];
+  const fresh = db.prepare(`SELECT * FROM fs_items WHERE root_id = ? AND scan_id = ? AND kind != 'folder'`).all(rootId, scanId) as unknown as FsRow[];
+  const signature = (r: FsRow): string => JSON.stringify([r.kind, r.size, r.mtime_ms]);
+  const olds = new Map<string, FsRow[]>();
+  const news = new Map<string, FsRow[]>();
+  for (const row of stale) olds.set(signature(row), [...(olds.get(signature(row)) ?? []), row]);
+  for (const row of fresh) news.set(signature(row), [...(news.get(signature(row)) ?? []), row]);
+
+  const remapped = new Map<string, { id: string; needsProbe: boolean }>();
+  for (const [key, oldRows] of olds) {
+    const newRows = news.get(key);
+    if (oldRows.length !== 1 || newRows?.length !== 1) continue;
+    const old = oldRows[0]!;
+    const moved = newRows[0]!;
+    db.prepare('DELETE FROM fs_items WHERE id = ?').run(moved.id);
+    db.prepare('UPDATE fs_items SET rel = ?, parent_id = ?, title = ?, sidecars = ?, scan_id = ? WHERE id = ?')
+      .run(moved.rel, moved.parent_id, moved.title, moved.sidecars, scanId, old.id);
+    remapped.set(moved.id, { id: old.id, needsProbe: old.probe === null && (old.broken === 0 || old.probe_attempts < 3) });
+  }
+  return remapped;
 }
 
 /** Un-mark a folder that turned out to hold no media, so the sweep removes it. */
@@ -111,7 +137,8 @@ export function dropRootsExcept(db: Database, keep: readonly string[]): void {
 }
 
 export function setProbe(db: Database, id: string, probe: Probe | null): void {
-  db.prepare('UPDATE fs_items SET probe = ?, broken = ? WHERE id = ?').run(probe ? JSON.stringify(probe) : null, probe ? 0 : 1, id);
+  db.prepare('UPDATE fs_items SET probe = ?, broken = ?, probe_attempts = CASE WHEN ? THEN 0 ELSE probe_attempts + 1 END WHERE id = ?')
+    .run(probe ? JSON.stringify(probe) : null, probe ? 0 : 1, probe ? 1 : 0, id);
 }
 
 export function countItems(db: Database): { files: number; broken: number; pending: number } {

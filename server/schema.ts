@@ -37,4 +37,5 @@ export const SCHEMA: readonly string[] = [
   CREATE INDEX fs_items_parent ON fs_items(parent_id);
   CREATE INDEX fs_items_added ON fs_items(added_at);
   `,
+  `ALTER TABLE fs_items ADD COLUMN probe_attempts INTEGER NOT NULL DEFAULT 0;`,
 ];

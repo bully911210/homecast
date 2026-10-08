@@ -8,7 +8,7 @@ import { HttpError, notFound } from '../../http.ts';
 import type { HlsJobs } from '../../hls.ts';
 import { resolveInJail } from '../../jail.ts';
 import { ext, mimeOf, probeFile, type Probe } from '../../media.ts';
-import { buildHlsArgs, canDirectPlay, type Encoder } from '../../playback.ts';
+import { compileFfmpegArgs, planPlayback, type Encoder } from '../../playback.ts';
 import type { Database } from '../../store.ts';
 import { serveFile } from '../../stream.ts';
 import { embeddedToVtt, sidecarToVtt, TEXT_SUB_CODECS } from '../../subs.ts';
@@ -25,6 +25,7 @@ export interface FsDeps {
   ffprobe: string | null;
   hls: HlsJobs | null;
   encoder: () => Encoder;
+  encoders?: () => readonly Encoder[];
   cacheDir: string; // thumbs/ and subs/ live here
 }
 
@@ -53,7 +54,13 @@ function toItem(row: FsRow): Item {
   const t = row.kind === 'video' ? parseTitle(name) : { title: row.title };
   const meta: Record<string, unknown> = { size: row.size, addedAt: row.added_at, broken: row.broken === 1 };
   if ('year' in t && t.year) meta.year = t.year;
-  if ('season' in t && t.season !== undefined) Object.assign(meta, { season: t.season, episode: t.episode });
+  if ('season' in t && t.season !== undefined) {
+    Object.assign(meta, { season: t.season, episode: t.episode });
+    if (t.episodeEnd !== undefined) meta.episodeEnd = t.episodeEnd;
+  }
+  for (const key of ['resolution', 'hdr', 'videoCodec', 'audioCodec', 'channels', 'tags'] as const) {
+    if (key in t && t[key] !== undefined) meta[key] = t[key];
+  }
   if (probe) {
     meta.duration = probe.duration;
     if (probe.video) Object.assign(meta, { width: probe.video.width, height: probe.video.height, videoCodec: probe.video.codec });
@@ -68,7 +75,7 @@ function toItem(row: FsRow): Item {
 function sortItems(items: Item[]): Item[] {
   return [...items].sort((a, b) => {
     if ((a.kind === 'folder') !== (b.kind === 'folder')) return a.kind === 'folder' ? -1 : 1;
-    return collator.compare(a.title, b.title);
+    return collator.compare(a.title, b.title) || a.id.localeCompare(b.id);
   });
 }
 
@@ -91,14 +98,14 @@ export function createFsProvider(d: FsDeps): ProviderWithGet {
   async function ensureProbe(row: FsRow, path: string): Promise<Probe> {
     const existing = parseProbe(row);
     if (existing) return existing;
-    if (row.broken === 1 || !d.ffprobe) throw new HttpError(422, 'this file cannot be played');
+    if (row.broken === 1 || !d.ffprobe) throw new HttpError(422, 'this file cannot be played', 'MEDIA_UNREADABLE');
     try {
       const p = await probeFile(d.ffprobe, path);
       repo.setProbe(d.db, row.id, p);
       return p;
     } catch {
       repo.setProbe(d.db, row.id, null);
-      throw new HttpError(422, 'this file cannot be played');
+      throw new HttpError(422, 'this file cannot be played', 'MEDIA_UNREADABLE');
     }
   }
 
@@ -113,31 +120,46 @@ export function createFsProvider(d: FsDeps): ProviderWithGet {
     if (audioIndex !== undefined && !probe.audio.some((a) => a.index === audioIndex)) throw new HttpError(400, 'unknown audio track');
     const start = intParam(q, 't', 1e7) ?? 0;
     const hlsFile = q.get('hls');
-    // safe=1: the client failed to play what its caps promised (common with HEVC). Use H.264/AAC only.
     const safe = q.get('safe') === '1';
-    const caps = safe ? { ...ctx.device.caps, hevc: false, vp9: false, av1: false } : ctx.device.caps;
-
+    const attempt = intParam(q, 'attempt', 6) ?? 0;
+    const encoders = [...new Set([...(d.encoders?.() ?? (d.ffmpeg ? [d.encoder()] : [])), ...(d.ffmpeg ? ['libx264' as const] : [])])];
+    const playbackPlan = planPlayback(
+      probe,
+      ctx.device.caps,
+      ext(path),
+      { ffmpeg: d.ffmpeg !== null, ffprobe: d.ffprobe !== null, hls: d.hls !== null, encoders },
+      { audioIndex, start, safe, attempt, forceHls: hlsFile !== null },
+    );
+    if (playbackPlan.mode === 'unplayable') {
+      const message = playbackPlan.reason === 'TRANSCODER_UNAVAILABLE'
+        ? 'ffmpeg is not available, so this file cannot be converted'
+        : 'no compatible playback path is available for this file';
+      throw new HttpError(503, message, playbackPlan.reason);
+    }
     if (hlsFile === null) {
-      if (start === 0 && !safe && canDirectPlay(probe, caps, ext(path), audioIndex)) {
-        return serveFile(ctx.req, path, { contentType: mimeOf(path) });
+      if (playbackPlan.mode === 'direct') {
+        return serveFile(ctx.req, path, { contentType: mimeOf(path), playbackMode: 'direct' });
       }
       const qs = new URLSearchParams({ hls: 'index.m3u8', t: String(Math.floor(start)) });
       if (audioIndex !== undefined) qs.set('a', String(audioIndex));
       if (safe) qs.set('safe', '1');
-      return new Response(null, { status: 302, headers: { Location: `/api/open/fs:${row.id}?${qs}`, 'Cache-Control': 'no-store' } });
+      if (attempt) qs.set('attempt', String(attempt));
+      const headers = { Location: `/api/open/fs:${row.id}?${qs}`, 'Cache-Control': 'no-store', 'X-HomeCast-Playback': playbackPlan.mode };
+      return new Response(null, { status: ctx.req.method === 'HEAD' ? 204 : 302, headers });
     }
+    if (playbackPlan.mode === 'direct') throw new Error('direct playback plan cannot serve an HLS file');
     if (!d.hls || !d.ffmpeg) throw new HttpError(503, 'ffmpeg is not available, so this file cannot be converted');
     const t = Math.floor(start);
-    const suffix = `${audioIndex !== undefined ? `&a=${audioIndex}` : ''}${safe ? '&safe=1' : ''}`;
+    const suffix = `${audioIndex !== undefined ? `&a=${audioIndex}` : ''}${safe ? '&safe=1' : ''}${attempt ? `&attempt=${attempt}` : ''}`;
     // The key covers everything that changes the output: file version, start, track, codec choice.
-    const variant = `${Math.floor(row.mtime_ms).toString(36)}-${t}-${audioIndex ?? 'd'}-${caps.hevc ? 'h' : 'x'}${safe ? 's' : ''}`;
+    const variant = `${Math.floor(row.mtime_ms).toString(36)}-${t}-${audioIndex ?? 'd'}-${ctx.device.caps.hevc ? 'h' : 'x'}-${attempt}${safe ? 's' : ''}`;
     return d.hls.serve({
       key: `${row.id}-${ctx.device.id}-${variant}`,
       group: `${row.id}-${ctx.device.id}`,
       file: hlsFile,
+      playbackMode: playbackPlan.mode,
       uri: (f) => `/api/open/fs:${row.id}?hls=${f}&t=${t}${suffix}`,
-      // Safe mode also avoids the hardware encoder, in case that is what failed.
-      args: (outDir) => buildHlsArgs(probe, caps, { input: path, outDir, start: t, audioIndex, encoder: safe ? 'libx264' : d.encoder() }).args,
+      args: (outDir) => compileFfmpegArgs(playbackPlan, probe, { input: path, outDir, start: t, audioIndex, encoder: playbackPlan.mode === 'transcode' ? playbackPlan.encoder : d.encoder() }),
     });
   }
 

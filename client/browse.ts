@@ -1,6 +1,7 @@
 // The one browse screen: a top bar, a hero on the home screen, rows (Continue Watching,
 // Recently Added) and a grid of tiles.
-import type { Item } from '../shared/types.ts';
+import { mediaMeta, type Item } from '../shared/types.ts';
+import { PLAY_AGAIN_RATIO } from '../shared/watch.ts';
 import { listItems } from './api.ts';
 import { clear, fmtTime, h } from './dom.ts';
 import { icon, mark } from './icons.ts';
@@ -38,27 +39,38 @@ function lazyImg(img: HTMLImageElement): void {
 
 /** "Big Buck Bunny (2008)" -> "Big Buck Bunny" when the year is shown separately. */
 export function displayTitle(it: Item): string {
-  const year = it.meta?.year;
-  return typeof year === 'number' ? it.title.replace(new RegExp(`\\s*\\(${year}\\)$`), '') : it.title;
+  const year = mediaMeta(it)?.year;
+  return year !== undefined ? it.title.replace(new RegExp(`\\s*\\(${year}\\)$`), '') : it.title;
 }
 
 /** "2008 · 9:56" for films, "Offline" or "Can't be played" when that matters more. */
 export function subtitle(it: Item): string {
   const m = it.meta ?? {};
+  const media = mediaMeta(it);
   if (m.broken) return "Can't be played";
   if (m.offline) return 'Offline';
   const parts: string[] = [];
-  if (typeof m.year === 'number') parts.push(String(m.year));
-  if ((it.kind === 'video' || it.kind === 'audio') && typeof m.duration === 'number' && m.duration > 0) parts.push(fmtTime(m.duration));
+  if (media?.season !== undefined && media.episode !== undefined) parts.push(`S${String(media.season).padStart(2, '0')}E${String(media.episode).padStart(2, '0')}`);
+  if (media?.year !== undefined) parts.push(String(media.year));
+  if (media && media.duration !== undefined && media.duration > 0) parts.push(fmtTime(media.duration));
   if (it.kind === 'folder') parts.push('Folder');
   return parts.join(' · ');
 }
 
 function progressOf(it: Item): number {
-  const m = it.meta ?? {};
-  const pos = typeof m.position === 'number' ? m.position : 0;
-  const dur = typeof m.duration === 'number' ? m.duration : 0;
+  const m = mediaMeta(it);
+  const pos = m?.position ?? 0;
+  const dur = m?.duration ?? 0;
   return pos > 0 && dur > 0 ? Math.min(1, pos / dur) : 0;
+}
+
+export function primaryActionLabel(it: Item): 'Play' | 'Resume' | 'Play again' {
+  const p = progressOf(it);
+  return mediaMeta(it)?.watched === true || p >= PLAY_AGAIN_RATIO ? 'Play again' : p > 0 ? 'Resume' : 'Play';
+}
+
+function primaryActionItem(it: Item): Item {
+  return primaryActionLabel(it) === 'Play again' ? { ...it, meta: { ...it.meta, position: 0, watched: true } } : it;
 }
 
 export function tile(it: Item, onClick: () => void): HTMLButtonElement {
@@ -94,7 +106,8 @@ function hero(it: Item, eyebrow: string, onPlay: () => void): HTMLElement {
     img.addEventListener('load', () => backdrop.classList.add('has-img'));
     backdrop.appendChild(img);
   }
-  const play = h('button', { class: 'btn primary', 'data-nav': true, 'data-id': `hero:${it.id}`, type: 'button' }, icon('play', 'ico'), p > 0 ? ' Resume' : ' Play');
+  const label = primaryActionLabel(it);
+  const play = h('button', { class: 'btn primary', 'data-nav': true, 'data-id': `hero:${it.id}`, type: 'button' }, icon('play', 'ico'), ` ${label}`);
   play.addEventListener('click', onPlay);
   return h(
     'section',
@@ -162,8 +175,9 @@ export async function renderBrowse(root: HTMLElement, path: Crumb[], handlers: B
   const rows = atRoot ? items.filter((i) => i.meta?.row) : [];
   const rest = items.filter((i) => rows.indexOf(i) === -1);
   const rowItems: { row: Item; children: Item[] }[] = [];
-  for (const r of rows) {
-    const children = await listItems(r.id).catch(() => [] as Item[]);
+  const rowChildren = await Promise.all(rows.map((r) => listItems(r.id).catch(() => [] as Item[])));
+  for (const [index, r] of rows.entries()) {
+    const children = rowChildren[index]!;
     if (children.length) rowItems.push({ row: r, children });
   }
 
@@ -190,7 +204,7 @@ export async function renderBrowse(root: HTMLElement, path: Crumb[], handlers: B
   const first = rowItems[0];
   if (first) {
     const it = first.children[0]!;
-    main.appendChild(hero(it, first.row.title, () => handlers.open(it, first.children)));
+    main.appendChild(hero(it, first.row.title, () => handlers.open(primaryActionItem(it), first.children)));
   }
   for (const { row: r, children } of rowItems) {
     const row = h('div', { class: 'row' });

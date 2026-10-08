@@ -147,10 +147,16 @@ export class Scanner {
     const rootRowId = tx(this.#db, () => repo.upsert(this.#db, rootId, scanId, rootRow).id);
     await this.#walk(rootId, scanId, real, '', rootRowId, toProbe);
     if (this.#roots.get(rootId) !== entry) return; // root removed or replaced while we walked
+    const moved = tx(this.#db, () => repo.reuseMovedIds(this.#db, rootId, scanId));
+    const probeTargets = toProbe.flatMap((item) => {
+      const replacement = moved.get(item.id);
+      if (!replacement) return [item];
+      return replacement.needsProbe ? [{ ...item, id: replacement.id }] : [];
+    });
     const removed = repo.sweep(this.#db, rootId, scanId);
-    log.info(`scanned ${entry.root.path}: ${toProbe.length} to probe, ${removed} removed`);
+    log.info(`scanned ${entry.root.path}: ${probeTargets.length} to probe, ${removed} removed`);
     this.#watch(rootId, real);
-    await this.#probeAll(toProbe);
+    await this.#probeAll(probeTargets);
   }
 
   /** Index one folder. Returns true when it (recursively) contains media. */

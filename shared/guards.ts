@@ -26,7 +26,7 @@ export function parseStateBody(v: unknown): StateBody | null {
   const duration = v.duration === undefined ? 0 : v.duration;
   if (!isFiniteNonNeg(duration)) return null;
   if (v.watched !== undefined && typeof v.watched !== 'boolean') return null;
-  return { position: v.position, duration, watched: v.watched };
+  return { position: duration > 0 ? Math.min(v.position, duration) : v.position, duration, watched: v.watched };
 }
 
 const CAP_KEYS = ['h264', 'hevc', 'vp9', 'av1', 'hls'] as const;

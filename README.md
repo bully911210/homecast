@@ -32,7 +32,7 @@ That's it. Browse with the remote, a pointer remote or a mouse.
 | | |
 |---|---|
 | <img src="docs/media/home.jpg" alt="Home screen with Continue Watching and Recently Added rows"> | <img src="docs/media/player.jpg" alt="Player with seek bar, ten-second skip and audio and subtitle menu"> |
-| **Continue Watching and Recently Added**, resume where you stopped, on every TV in the house | **Plays almost anything.** Files the TV can't decode are converted on the fly, on your GPU when you have one |
+| **Continue Watching and Recently Added**, resume where you stopped or play it again, on every TV in the house | **Plays almost anything.** Files the TV can't decode are converted on the fly, on your GPU when you have one |
 | <img src="docs/media/pair.png" alt="Pairing screen with on-screen keypad"> | <img src="docs/media/admin.png" alt="Admin page with QR code, PIN, folders, devices and health checks"> |
 | **Pair once with a PIN.** No accounts, no passwords, devices you can revoke | **One admin page** on the PC: folders, devices, health warnings, start with Windows |
 
@@ -60,7 +60,7 @@ The exe isn't code-signed yet, so SmartScreen asks once ("More info", then "Run 
 
 ```mermaid
 flowchart LR
-  TV["TV browser<br/>12 KB client"] -- "4 routes" --> R["Router<br/>(Hono)"]
+  TV["TV browser<br/>12.7 KB client"] -- "4 routes" --> R["Router<br/>(Hono)"]
   R --> P["Providers<br/>fs · home · yours next"]
   P -- "TV can decode it" --> D["Direct stream<br/>Range, 206, ETag"]
   P -- "TV can't" --> H["One ffmpeg builder<br/>copy what plays, convert the rest"]

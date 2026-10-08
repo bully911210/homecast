@@ -1,6 +1,7 @@
 // node:sqlite store. One schema, migrated by PRAGMA user_version.
 import type { DatabaseSync as DB } from 'node:sqlite';
 import type { ItemState } from '../shared/types.ts';
+import { CONTINUE_MIN_SECONDS, MIN_WATCH_DURATION_SECONDS, WATCHED_RATIO } from '../shared/watch.ts';
 import { SCHEMA } from './schema.ts';
 
 export type Database = DB;
@@ -51,7 +52,7 @@ interface StateRow {
 }
 
 export function saveState(db: Database, itemId: string, s: { position: number; duration: number; watched?: boolean }): ItemState {
-  const watched = s.watched ?? (s.duration > 0 && s.position / s.duration > 0.92);
+  const watched = s.duration >= MIN_WATCH_DURATION_SECONDS && (s.watched ?? (s.position / s.duration > WATCHED_RATIO));
   const updatedAt = Date.now();
   db.prepare(
     `INSERT INTO state(item_id, position, duration, watched, updated_at) VALUES (?, ?, ?, ?, ?)
@@ -79,7 +80,7 @@ export function getStates(db: Database, ids: readonly string[]): Map<string, Ite
 /** Most recently touched, partially watched items. */
 export function inProgress(db: Database, limit: number): string[] {
   const rows = db
-    .prepare('SELECT item_id FROM state WHERE watched = 0 AND position > 30 ORDER BY updated_at DESC LIMIT ?')
-    .all(limit) as unknown as { item_id: string }[];
+    .prepare('SELECT item_id FROM state WHERE watched = 0 AND position > ? AND (duration <= 0 OR position / duration < ?) ORDER BY updated_at DESC LIMIT ?')
+    .all(CONTINUE_MIN_SECONDS, WATCHED_RATIO, limit) as unknown as { item_id: string }[];
   return rows.map((r) => r.item_id);
 }

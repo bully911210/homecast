@@ -1,12 +1,30 @@
 // The four item routes plus pairing. Same-origin fetches; the httpOnly cookie rides along.
 import type { Caps, Item } from '../shared/types.ts';
+import type { ErrorCode } from '../shared/errors.ts';
 
 export class NotPaired extends Error {}
 
+const ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
+  MEDIA_NOT_FOUND: 'This item is no longer available.',
+  MEDIA_UNREADABLE: 'This file is damaged or cannot be read.',
+  UNSUPPORTED_MEDIA: 'This media format is not supported.',
+  NO_PLAYBACK_PATH: 'This TV and PC have no compatible playback option.',
+  TRANSCODER_UNAVAILABLE: 'This file needs conversion, but ffmpeg is unavailable.',
+  TRANSCODER_FAILED: 'The PC could not convert this file.',
+  DEVICE_UNSUPPORTED: 'This TV cannot play this file.',
+  AUTH_REQUIRED: 'This TV is no longer paired. Go back and pair again.',
+  PAIRING_REQUIRED: 'This TV is no longer paired. Go back and pair again.',
+  NETWORK_ERROR: 'Cannot reach the PC.',
+};
+
+export function messageForError(code?: ErrorCode): string | undefined {
+  return code ? ERROR_MESSAGES[code] : undefined;
+}
+
 async function json<T>(res: Response): Promise<T> {
   if (res.status === 401) throw new NotPaired('not paired');
-  const body = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  const body = (await res.json().catch(() => ({}))) as T & { error?: string; code?: ErrorCode };
+  if (!res.ok) throw new Error(messageForError(body.code) ?? body.error ?? `HTTP ${res.status}`);
   return body;
 }
 
@@ -21,7 +39,22 @@ export async function saveState(id: string, position: number, duration: number):
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ position: Math.max(0, position), duration: Math.max(0, duration) }),
+    keepalive: true,
   }).catch(() => undefined); // best effort: playback must not stop because a save failed
+}
+
+export function beaconState(id: string, position: number, duration: number): void {
+  const body = JSON.stringify({ position: Math.max(0, position), duration: Math.max(0, duration) });
+  const blob = new Blob([body], { type: 'application/json' });
+  if (!navigator.sendBeacon(`/api/state/${encodeURIComponent(id)}`, blob)) {
+    void fetch(`/api/state/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      keepalive: true,
+    }).catch(() => undefined);
+  }
 }
 
 export async function pair(pin: string, caps: Caps): Promise<void> {
