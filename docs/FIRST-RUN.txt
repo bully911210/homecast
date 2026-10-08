@@ -1,0 +1,28 @@
+HomeCast - first run (about 3 minutes)
+======================================
+
+1. Unzip this folder anywhere (for example Documents\HomeCast). Keep the files together.
+
+2. Double-click homecast.exe.
+   - If Windows SmartScreen appears: "More info" > "Run anyway" (the exe is not code-signed).
+   - Windows Defender Firewall asks whether to allow HomeCast.
+     Tick "Private networks" ONLY. Leave "Public networks" unticked. Click "Allow access".
+
+3. Your browser opens the admin page (http://localhost:8096/admin).
+   - Paste a folder path (in File Explorer: right-click a folder > "Copy as path") and click "Add folder".
+   - If the Health box warns that your network is "Public", open Windows Settings >
+     Network & internet > Wi-Fi (or Ethernet) > your network > set "Network profile type" to Private.
+
+4. On the TV (or a phone), open the web browser and type the address shown on the admin page
+   (like http://192.168.1.20:8096), or scan the QR code with a phone.
+   Enter the 6-digit PIN shown on the admin page. Done: browse and play.
+
+The green dot in the system tray means HomeCast is running; red means it is off
+(right-click it > "Start server"). Tick "Start HomeCast when I sign in" on the admin page to
+start it automatically.
+
+HomeCast only reads your folders. It never changes or deletes your files.
+Its own data (index, thumbnails, logs) lives in %LOCALAPPDATA%\HomeCast.
+To uninstall: untick "Start HomeCast when I sign in", quit, delete this folder and %LOCALAPPDATA%\HomeCast.
+
+ffmpeg.exe and ffprobe.exe are third-party programs (FFmpeg, GPL). See FFMPEG-LICENSE.

@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HomeCast Admin</title>
+<link rel="icon" href="data:,">
+<style>
+:root { --bg: #f6f7f9; --card: #fff; --text: #14171c; --muted: #5f6877; --line: #e2e5ea; --accent: #b37a00; --ok: #1a7f37; --warn: #9a3412; --warnbg: #fff4e5; }
+@media (prefers-color-scheme: dark) { :root { --bg: #0e1116; --card: #171b22; --text: #eef1f5; --muted: #9aa3b2; --line: #262c36; --accent: #ffcc33; --ok: #4ade80; --warn: #fdba74; --warnbg: #2b1d0e; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 980px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 28px; margin: 8px 0 20px; }
+h2 { font-size: 18px; margin: 0 0 12px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+.pairing { display: grid; grid-template-columns: 220px 1fr; gap: 24px; align-items: center; }
+@media (max-width: 640px) { .pairing { grid-template-columns: 1fr; } }
+.qr svg { width: 100%; height: auto; background: #fff; border-radius: 8px; }
+.url { font-size: 22px; font-weight: 600; word-break: break-all; }
+.pin { font: 700 48px/1.1 ui-monospace, Consolas, monospace; letter-spacing: 8px; color: var(--accent); }
+.muted { color: var(--muted); font-size: 14px; }
+ul { list-style: none; margin: 0; padding: 0; }
+li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+li:first-child { border-top: 0; }
+li span { word-break: break-all; }
+button { font: inherit; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px; padding: 8px 14px; cursor: pointer; min-height: 40px; }
+button.primary { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+input[type=text] { flex: 1; min-width: 200px; font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); min-height: 40px; }
+.warn { background: var(--warnbg); color: var(--warn); border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; }
+.ok { color: var(--ok); font-weight: 600; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 12px 0 0; }
+dt { color: var(--muted); }
+dd { margin: 0; }
+#error { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>HomeCast</h1>
+  <div id="error" class="warn"></div>
+
+  <section class="card">
+    <h2>Pair a TV or phone</h2>
+    <div class="pairing">
+      <div class="qr" id="qr"></div>
+      <div>
+        <div class="muted">On the TV's web browser, open</div>
+        <div class="url" id="url">…</div>
+        <div class="muted" style="margin-top:16px">then enter this PIN</div>
+        <div class="pin" id="pin">······</div>
+        <div class="muted" id="pinNote"></div>
+        <div class="row" style="margin-top:12px"><button id="newPin">New PIN</button></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Shared folders</h2>
+    <ul id="roots"></ul>
+    <form class="row" id="addForm" style="margin-top:12px">
+      <input type="text" id="path" placeholder="Paste a folder path, e.g. D:\Movies" autocomplete="off">
+      <button class="primary" type="submit">Add folder</button>
+      <button type="button" id="rescan">Rescan</button>
+    </form>
+    <p class="muted">Tip: in File Explorer, right-click a folder and choose "Copy as path". HomeCast never changes or deletes your files.</p>
+  </section>
+
+  <section class="card">
+    <h2>Devices</h2>
+    <ul id="devices"></ul>
+  </section>
+
+  <section class="card">
+    <h2>Health</h2>
+    <div id="warnings"></div>
+    <dl id="health"></dl>
+  </section>
+
+  <section class="card">
+    <h2>Start with Windows</h2>
+    <label><input type="checkbox" id="autostart"> Start HomeCast when I sign in</label>
+  </section>
+</main>
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  function api(method, path, body) {
+    return fetch(path, {
+      method: method,
+      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        return j;
+      });
+    });
+  }
+  function el(tag, text, cls) { var e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; }
+  function showError(err) { var e = $('error'); e.textContent = err ? String(err.message || err) : ''; e.style.display = err ? 'block' : 'none'; }
+  function bytes(n) { var u = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0; while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; } return n.toFixed(i ? 1 : 0) + ' ' + u[i]; }
+  function ago(ts) { if (!ts) return 'never'; var s = Math.round((Date.now() - ts) / 1000); return s < 60 ? 'just now' : s < 3600 ? Math.round(s / 60) + ' min ago' : s < 86400 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' days ago'; }
+  var lastQr = '';
+
+  function render(s) {
+    $('url').textContent = s.url;
+    $('pin').textContent = s.pin;
+    $('pinNote').textContent = 'Changes after each pairing, or in ' + Math.max(0, Math.round((s.pinExpiresAt - Date.now()) / 60000)) + ' min.';
+    if (s.qr !== lastQr) {
+      lastQr = s.qr;
+      var svg = new DOMParser().parseFromString(s.qr, 'image/svg+xml').documentElement;
+      $('qr').replaceChildren(document.importNode(svg, true));
+    }
+    var roots = $('roots'); roots.replaceChildren();
+    if (!s.roots.length) roots.appendChild(el('li', 'No folders yet. Add one below.', 'muted'));
+    s.roots.forEach(function (r) {
+      var li = el('li'); li.appendChild(el('span', r.path));
+      var b = el('button', 'Remove'); b.onclick = function () { api('DELETE', '/admin/api/roots/' + r.id).then(refresh, showError); };
+      li.appendChild(b); roots.appendChild(li);
+    });
+    var devs = $('devices'); devs.replaceChildren();
+    if (!s.devices.length) devs.appendChild(el('li', 'No paired devices yet.', 'muted'));
+    s.devices.forEach(function (d) {
+      var li = el('li'); li.appendChild(el('span', d.name + ' — last seen ' + ago(d.lastSeen)));
+      var b = el('button', 'Revoke'); b.onclick = function () { api('DELETE', '/admin/api/devices/' + d.id).then(refresh, showError); };
+      li.appendChild(b); devs.appendChild(li);
+    });
+    var h = s.health, w = $('warnings'); w.replaceChildren();
+    (h.warnings || []).forEach(function (t) { w.appendChild(el('div', t, 'warn')); });
+    if (!(h.warnings || []).length) w.appendChild(el('div', 'All good.', 'ok'));
+    var rows = [
+      ['ffmpeg', h.ffmpeg ? 'found' : 'missing'],
+      ['Video encoder', h.encoder],
+      ['Active conversions', String(h.activeJobs)],
+      ['Conversion cache', bytes(h.cacheBytes || 0)],
+      ['Network adapter', h.adapter ? h.adapter.name + ' (' + h.adapter.address + ')' : 'none'],
+      ['Network profile', h.networkProfile || 'unknown'],
+      ['Library', h.library.files + ' files' + (h.library.broken ? ', ' + h.library.broken + ' unplayable' : '') + (h.library.scanning ? ' (scanning…)' : '')],
+      ['Last scan', ago(h.library.lastScanAt)],
+      ['Version', h.version],
+    ];
+    var dl = $('health'); dl.replaceChildren();
+    rows.forEach(function (r) { dl.appendChild(el('dt', r[0])); dl.appendChild(el('dd', r[1])); });
+    $('autostart').checked = !!s.autostart;
+  }
+
+  function refresh() { return api('GET', '/admin/api/status').then(function (s) { showError(null); render(s); }, showError); }
+
+  $('addForm').onsubmit = function (e) {
+    e.preventDefault();
+    var p = $('path').value.trim().replace(/^"(.*)"$/, '$1');
+    if (!p) return;
+    api('POST', '/admin/api/roots', { path: p }).then(function () { $('path').value = ''; return refresh(); }, showError);
+  };
+  $('rescan').onclick = function () { api('POST', '/admin/api/rescan', {}).then(refresh, showError); };
+  $('newPin').onclick = function () { api('POST', '/admin/api/pin', {}).then(refresh, showError); };
+  $('autostart').onchange = function (e) { api('POST', '/admin/api/autostart', { on: e.target.checked }).then(refresh, showError); };
+  refresh();
+  setInterval(refresh, 5000);
+})();
+</script>
+</body>
+</html>

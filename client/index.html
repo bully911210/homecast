@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HomeCast</title>
+<link rel="icon" href="data:,">
+<style>
+/* Designed for 1920x1080 at 3 m. 1rem = 16px at 1920 wide; everything scales with the screen.
+   Conservative CSS for older TV Chromium (69+): no flex gap, no aspect-ratio, no inset, no :focus-visible. */
+:root { --bg: #0e1116; --panel: #1a1f29; --text: #f2f4f8; --muted: #9aa3b2; --accent: #ffcc33; --ring: 6px; }
+html { font-size: 0.8333vw; background: var(--bg); }
+@media (max-aspect-ratio: 4/3) { html { font-size: 2.4vw; } }
+* { box-sizing: border-box; }
+body { margin: 0; color: var(--text); background: var(--bg); font: 1.75rem/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+body.idle, body.idle * { cursor: none !important; }
+button { font: inherit; color: inherit; }
+#app, .screen { position: fixed; top: 0; left: 0; right: 0; bottom: 0; }
+.screen { padding: 3.375rem 6rem 0; display: flex; flex-direction: column; } /* 5% safe area */
+.topbar { height: 5rem; display: flex; align-items: center; flex: none; }
+.topbar .crumbs { flex: 1; font-size: 2rem; font-weight: 600; margin: 0 1.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.btn { background: var(--panel); border: 0; border-radius: 0.75rem; min-width: 6rem; min-height: 6rem; padding: 0 1.75rem; cursor: pointer; outline: none; }
+.btn.focused { box-shadow: 0 0 0 var(--ring) var(--accent); background: #2a3242; }
+.topbar .btn { min-height: 4.5rem; }
+.icon-btn { font-size: 2.25rem; }
+.scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 1rem 0.5rem 4rem; }
+h2 { font-size: 2rem; margin: 1.5rem 0 1rem; color: var(--muted); font-weight: 600; }
+.row::-webkit-scrollbar, .scroll::-webkit-scrollbar { display: none; }
+.row { scrollbar-width: none; display: flex; overflow-x: auto; overflow-y: hidden; padding: 0.75rem 0.5rem 1.25rem; margin: 0 -0.5rem; }
+.row .tile { flex: none; width: 18.5rem; margin-right: 1.5rem; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(18.5rem, 1fr)); grid-gap: 2rem 1.5rem; padding: 0.75rem 0; }
+.tile { display: block; text-align: left; background: none; border: 0; padding: 0; cursor: pointer; outline: none; min-height: 7.5rem; }
+.tile .thumb { position: relative; width: 100%; padding-top: 56.25%; background: var(--panel); border-radius: 0.75rem; overflow: hidden; }
+.tile .thumb img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .2s; }
+.tile .thumb.has-img img { opacity: 1; }
+.tile .icon { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 4rem; }
+.tile.focused .thumb { box-shadow: 0 0 0 var(--ring) var(--accent); transform: scale(1.04); }
+.tile .thumb { transition: transform .12s; }
+.tile .title { margin-top: 0.75rem; font-size: 1.75rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .sub { font-size: 1.5rem; color: var(--muted); min-height: 2rem; }
+.tile.broken { opacity: .45; }
+.bar { position: absolute; left: 0; right: 0; bottom: 0; height: 0.5rem; background: rgba(255,255,255,.25); }
+.bar i { display: block; height: 100%; background: var(--accent); }
+.badge { position: absolute; top: 0.6rem; right: 0.6rem; background: var(--accent); color: #000; border-radius: 50%; width: 2.5rem; height: 2.5rem; text-align: center; line-height: 2.5rem; font-weight: 700; }
+.empty, .msg { color: var(--muted); font-size: 2rem; }
+.sentinel { height: 1px; }
+/* player */
+.player { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #000; z-index: 10; }
+.player .media, .player .photo { width: 100%; height: 100%; object-fit: contain; display: block; }
+.audio-art { position: absolute; top: 40%; left: 0; right: 0; text-align: center; font-size: 3rem; }
+.overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; padding: 3.375rem 6rem; display: flex; flex-direction: column; justify-content: space-between;
+  background: linear-gradient(rgba(0,0,0,.65), transparent 25%, transparent 65%, rgba(0,0,0,.8)); transition: opacity .3s; pointer-events: none; }
+.overlay.hide { opacity: 0; }
+.overlay .btn, .overlay .progress { pointer-events: auto; }
+.overlay.hide .btn, .overlay.hide .progress { pointer-events: none; }
+.otop { display: flex; align-items: center; }
+.otitle { font-size: 2.25rem; font-weight: 600; margin-left: 1.5rem; }
+.progress { height: 6rem; display: flex; align-items: center; cursor: pointer; outline: none; border-radius: 0.75rem; padding: 0 1rem; }
+.progress .track { flex: 1; height: 0.75rem; background: rgba(255,255,255,.3); border-radius: 0.4rem; overflow: hidden; pointer-events: none; }
+.progress .track i { display: block; height: 100%; width: 0; background: var(--accent); }
+.progress.focused { box-shadow: 0 0 0 var(--ring) var(--accent); }
+.progress.focused .track { height: 1.25rem; }
+.ctls { display: flex; align-items: center; margin-top: 1rem; }
+.ctls .btn { margin-right: 1.25rem; }
+.clock { margin-left: auto; font-size: 2rem; color: var(--muted); }
+.status { position: absolute; top: 45%; left: 0; right: 0; text-align: center; font-size: 2.25rem; display: none; }
+.status.show { display: block; }
+.menu { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; }
+.menu[hidden] { display: none; }
+.menu-box { background: var(--panel); border-radius: 1rem; padding: 2rem 2.5rem; display: flex; max-height: 80%; }
+.menu .col { min-width: 28rem; margin: 0 1.5rem; overflow-y: auto; }
+.menu .item { display: block; width: 100%; text-align: left; margin-bottom: 1rem; }
+.menu .item.active { color: var(--accent); }
+/* pairing */
+.pair { text-align: center; margin-top: 3rem; }
+.pair h1 { font-size: 4rem; margin: 0 0 1rem; }
+.pin { font: 700 6rem/1 ui-monospace, Consolas, monospace; letter-spacing: 1.5rem; margin: 2rem 0; }
+.keypad { display: inline-grid; grid-template-columns: repeat(3, 8rem); grid-gap: 1.25rem; }
+.keypad .btn { font-size: 2.5rem; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script src="/assets/app.js"></script>
+</body>
+</html>
