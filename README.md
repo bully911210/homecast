@@ -7,7 +7,7 @@
 [![CI](https://github.com/bully911210/homecast/actions/workflows/ci.yml/badge.svg)](https://github.com/bully911210/homecast/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/bully911210/homecast?label=download)](https://github.com/bully911210/homecast/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![TV client](https://img.shields.io/badge/TV%20client-12%20KB-brightgreen)
+![TV client](https://img.shields.io/badge/TV%20client-12.7%20KB-brightgreen)
 ![Runtime deps](https://img.shields.io/badge/runtime%20deps-6-brightgreen)
 
 <img src="docs/media/demo.gif" alt="Remote-only: home screen, Continue Watching, the library, Sintel converted on the fly, seek, audio and subtitle menu, back" width="720">
